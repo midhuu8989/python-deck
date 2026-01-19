@@ -1,6 +1,7 @@
 # streamlit_app.py
 # -------------------------------------------------------------
 # PPT → Review Narration → Preview Voice → Download PPT / MP4
+# (NO AZURE | OpenAI LLM + OpenAI TTS)
 # -------------------------------------------------------------
 
 import os
@@ -14,23 +15,22 @@ from pptx import Presentation
 from pptx.util import Inches
 from pydub import AudioSegment
 
-import openai
-import azure.cognitiveservices.speech as speechsdk
+from dotenv import load_dotenv
+from openai import OpenAI
 
 # ===================== CONFIG =====================
 MAX_FILE_MB = 20
-INDIAN_VOICE = "en-IN-NeerjaNeural"
 NARRATION_PREFIX = "In this slide we will look at "
 
-AZURE_KEY = os.getenv("AZURE_SPEECH_KEY")
-AZURE_REGION = os.getenv("AZURE_SPEECH_REGION")
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
+# ===================== ENV ========================
+load_dotenv()
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 
-if not AZURE_KEY or not AZURE_REGION or not OPENAI_KEY:
-    st.error("Missing API keys in environment / secrets")
+if not OPENAI_API_KEY:
+    st.error("Missing OPENAI_API_KEY")
     st.stop()
 
-openai.api_key = OPENAI_KEY
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ================= UI =============================
 st.set_page_config("PPT Narration Studio", layout="wide")
@@ -48,11 +48,11 @@ if "ppt_name" not in st.session_state:
     st.session_state.ppt_name = None
 
 # ================= HELPERS ========================
-def generate_narration(slide_text):
+def generate_narration(slide_text: str) -> str:
     prompt = f"""
 Create a narration suitable for self-directed learning.
 Rules:
-- Start exactly with: "{NARRATION_PREFIX}"
+- Start exactly with: \"{NARRATION_PREFIX}\"
 - No headings
 - No bullet references
 - Conversational teaching tone
@@ -60,46 +60,34 @@ Rules:
 Slide content:
 {slide_text}
 """
-    res = openai.ChatCompletion.create(
+    res = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
     )
     return res.choices[0].message.content.strip()
 
 
-def azure_tts(text, out_mp3, rate):
-    speech_config = speechsdk.SpeechConfig(
-        subscription=AZURE_KEY,
-        region=AZURE_REGION
-    )
-    speech_config.speech_synthesis_voice_name = INDIAN_VOICE
+def openai_tts(text: str, out_mp3: Path, speed: int):
+    # OpenAI TTS does not have SSML; speed is approximated via instruction
+    paced_text = f"Speak at {speed}% speed. {text}"
 
-    ssml = f"""
-    <speak version="1.0" xml:lang="en-IN">
-      <voice name="{INDIAN_VOICE}">
-        <prosody rate="{rate}%">
-          {text}
-        </prosody>
-      </voice>
-    </speak>
-    """
-
-    audio_cfg = speechsdk.audio.AudioOutputConfig(filename=str(out_mp3))
-    synthesizer = speechsdk.SpeechSynthesizer(
-        speech_config=speech_config,
-        audio_config=audio_cfg
-    )
-    synthesizer.speak_ssml_async(ssml).get()
+    with client.audio.speech.with_streaming_response.create(
+        model="gpt-4o-mini-tts",
+        voice="alloy",
+        input=paced_text,
+    ) as response:
+        response.stream_to_file(out_mp3)
 
 
-def add_audio_to_slide(slide, audio_path):
+def add_audio_to_slide(slide, audio_path: Path):
+    # Official python-pptx supported method (audio treated as movie)
     slide.shapes.add_movie(
         movie_file=str(audio_path),
         left=Inches(0.3),
         top=Inches(0.3),
         width=Inches(1),
         height=Inches(1),
-        mime_type="audio/mpeg"
+        mime_type="audio/mpeg",
     )
 
 # ================= FILE UPLOAD ====================
@@ -134,7 +122,7 @@ if ppt_file and not st.session_state.ppt_loaded:
             "text": slide_text,
             "notes": notes,
             "audio": None,
-            "duration": 0
+            "duration": 0,
         })
 
     st.session_state.ppt_loaded = True
@@ -146,7 +134,7 @@ if ppt_file and not st.session_state.ppt_loaded:
 if st.session_state.ppt_loaded:
     st.subheader("📝 Review & Preview Narration")
 
-    speed = st.slider("Narration Speed (%)", -20, 20, 0)
+    speed = st.slider("Narration Speed (%)", 80, 120, 100)
 
     for slide in st.session_state.slides:
         with st.expander(f"Slide {slide['index'] + 1}", expanded=False):
@@ -156,12 +144,12 @@ if st.session_state.ppt_loaded:
                 "Narration Text",
                 slide["notes"],
                 key=f"n_{slide['index']}",
-                height=120
+                height=120,
             )
 
             if st.button("🎧 Preview Voice", key=f"p_{slide['index']}"):
                 with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-                    azure_tts(slide["notes"], f.name, speed)
+                    openai_tts(slide["notes"], Path(f.name), speed)
                     audio = AudioSegment.from_mp3(f.name)
                     slide["audio"] = f.name
                     slide["duration"] = audio.duration_seconds
@@ -183,7 +171,7 @@ if st.session_state.ppt_loaded:
                 slide = prs.slides[slide_data["index"]]
 
                 mp3 = outdir / f"slide_{slide_data['index']}.mp3"
-                azure_tts(slide_data["notes"], mp3, speed)
+                openai_tts(slide_data["notes"], mp3, speed)
 
                 add_audio_to_slide(slide, mp3)
                 slide.notes_slide.notes_text_frame.text = slide_data["notes"]
@@ -195,14 +183,12 @@ if st.session_state.ppt_loaded:
                 "⬇ Download PPT",
                 final_ppt.read_bytes(),
                 file_name=st.session_state.ppt_name,
-                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
             )
 
     # ---------- MP4 VIDEO ----------
     with col2:
         if st.button("🎞 Download MP4 Video"):
-            st.info("Generating MP4 (requires FFmpeg + LibreOffice locally)")
+            st.info("MP4 generation requires FFmpeg + LibreOffice locally")
             st.warning("MP4 is not supported on Streamlit Cloud")
-
-            # Placeholder – MP4 pipeline is correct but environment-dependent
             st.stop()
