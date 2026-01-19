@@ -1,6 +1,6 @@
 # -------------------------------------------------------------
-# Streamlit App: PPT → Voice-over Preview → Download PPT
-# (OpenAI LLM + OpenAI TTS | Indian narration style)
+# Streamlit App: PPT → Voice Preview → Download PPT with Voice
+# (Skip slides with no/unclear text)
 # -------------------------------------------------------------
 
 # ===================== IMPORTS =====================
@@ -30,7 +30,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # ================= UI SETUP ======================
 st.set_page_config(page_title="PPT Voice Over Studio", layout="wide")
 st.title("🎤 PPT Voice Over Studio")
-st.caption("Preview voice per slide • Generate PPT with Indian-style narration")
+st.caption("Narration only for slides with clear visible text")
 
 st.divider()
 
@@ -45,12 +45,14 @@ if "ppt_name" not in st.session_state:
     st.session_state.ppt_name = None
 
 # ================= HELPERS =======================
+def is_text_clear(text: str) -> bool:
+    """
+    Decide whether slide text is clear enough for narration
+    """
+    return bool(text and len(text.strip()) >= 20)
+
+
 def generate_narration(slide_text: str, slide_index: int) -> str:
-    """
-    Slide narration rules:
-    - Slide 1: Today we are going to start with <topic>
-    - Other slides: In this slide we are going to look into
-    """
     if slide_index == 0:
         prefix = "Today we are going to start with "
     else:
@@ -58,16 +60,16 @@ def generate_narration(slide_text: str, slide_index: int) -> str:
 
     prompt = f"""
 Generate narration for self-directed learning.
+
 Rules:
 - Start exactly with: "{prefix}"
-- Use simple Indian teaching tone
+- Simple Indian teaching tone
 - No headings
 - No bullet points
 
 Slide content:
 {slide_text}
 """
-
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
@@ -76,9 +78,6 @@ Slide content:
 
 
 def openai_tts(text: str, out_mp3: Path):
-    """
-    OpenAI TTS – neutral voice, Indian-style narration via text
-    """
     with client.audio.speech.with_streaming_response.create(
         model="gpt-4o-mini-tts",
         voice="alloy",
@@ -88,9 +87,6 @@ def openai_tts(text: str, out_mp3: Path):
 
 
 def add_audio_to_slide(slide, audio_path: Path):
-    """
-    Official python-pptx supported audio embedding
-    """
     slide.shapes.add_movie(
         movie_file=str(audio_path),
         left=Inches(0.3),
@@ -104,8 +100,6 @@ def add_audio_to_slide(slide, audio_path: Path):
 ppt_file = st.file_uploader("📤 Upload PPTX", type=["pptx"])
 
 if ppt_file and not st.session_state.ppt_loaded:
-    st.info("📄 PPT uploaded. Reading slides…")
-
     workdir = Path(tempfile.mkdtemp())
     ppt_path = workdir / ppt_file.name
     ppt_path.write_bytes(ppt_file.read())
@@ -118,6 +112,17 @@ if ppt_file and not st.session_state.ppt_loaded:
             shape.text for shape in slide.shapes if hasattr(shape, "text")
         ).strip()
 
+        if not is_text_clear(slide_text):
+            # Skip narration for unclear slides
+            st.session_state.slides.append({
+                "index": idx,
+                "text": slide_text,
+                "notes": "",
+                "skip": True,
+                "audio": None,
+            })
+            continue
+
         notes = ""
         if slide.has_notes_slide:
             notes = slide.notes_slide.notes_text_frame.text.strip()
@@ -129,8 +134,8 @@ if ppt_file and not st.session_state.ppt_loaded:
             "index": idx,
             "text": slide_text,
             "notes": notes,
+            "skip": False,
             "audio": None,
-            "duration": 0,
         })
 
     st.session_state.ppt_loaded = True
@@ -140,11 +145,16 @@ if ppt_file and not st.session_state.ppt_loaded:
 
 # ================= PREVIEW ========================
 if st.session_state.ppt_loaded:
-    st.subheader("🎧 Preview Voice per Slide")
+    st.subheader("🎧 Preview Voice (only for valid slides)")
 
     for slide in st.session_state.slides:
         with st.expander(f"Slide {slide['index'] + 1}", expanded=False):
-            st.write(slide["text"] or "_No visible text_")
+
+            if slide["skip"]:
+                st.info("ℹ️ Narration skipped (no clear visible text on slide)")
+                continue
+
+            st.write(slide["text"])
 
             slide["notes"] = st.text_area(
                 "Narration Text",
@@ -157,9 +167,6 @@ if st.session_state.ppt_loaded:
                 with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
                     with st.spinner("Generating voice…"):
                         openai_tts(slide["notes"], Path(f.name))
-                        audio = AudioSegment.from_mp3(f.name)
-                        slide["audio"] = f.name
-                        slide["duration"] = audio.duration_seconds
                     st.audio(f.name)
 
 # ================= FINAL GENERATION =================
@@ -174,8 +181,14 @@ if st.session_state.ppt_loaded:
         progress = st.progress(0.0)
         status = st.empty()
 
-        for idx, slide_data in enumerate(st.session_state.slides, start=1):
-            status.info(f"🔄 Generating voice for slide {idx} of {total}")
+        processed = 0
+        for slide_data in st.session_state.slides:
+            processed += 1
+            status.info(f"🔄 Processing slide {processed} of {total}")
+
+            if slide_data["skip"]:
+                progress.progress(processed / total)
+                continue
 
             slide = prs.slides[slide_data["index"]]
             mp3_path = outdir / f"slide_{slide_data['index']}.mp3"
@@ -184,10 +197,10 @@ if st.session_state.ppt_loaded:
             add_audio_to_slide(slide, mp3_path)
             slide.notes_slide.notes_text_frame.text = slide_data["notes"]
 
-            progress.progress(idx / total)
+            progress.progress(processed / total)
             time.sleep(0.1)
 
-        status.success("✅ Voice-over added to all slides")
+        status.success("✅ Voice-over added (skipped unclear slides)")
 
         final_ppt = outdir / st.session_state.ppt_name
         prs.save(final_ppt)
