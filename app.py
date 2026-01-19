@@ -209,4 +209,5 @@ if st.session_state.ppt_loaded:
         if st.button("🎞 Download MP4 Video"):
             st.warning(
                 "MP4 generation requires FFmpeg + LibreOffice.\n"
-                "Run locally or via Docker. Not supp
+                "Run locally or via Docker. Not supported on Streamlit Cloud."
+            )
