@@ -1,9 +1,9 @@
 # -------------------------------------------------------------
 # Streamlit App: PPT → Review Narration → Preview Voice
-# → Sequential Generation → Download PPT / MP4
+# → Sequential Processing → Download PPT / MP4
 # -------------------------------------------------------------
 
-# ===================== IMPORTS (ORDER MATTERS) =====================
+# ===================== IMPORTS =====================
 import os
 import tempfile
 import time
@@ -18,7 +18,6 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 # ===================== CONFIG =====================
-MAX_FILE_MB = 20
 NARRATION_PREFIX = "In this slide we will look at "
 
 # ===================== ENV ========================
@@ -34,7 +33,9 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # ================= UI SETUP ======================
 st.set_page_config(page_title="PPT Narration Studio", layout="wide")
 st.title("🎬 PPT Narration Studio")
-st.caption("Preview narration per slide • Sequential processing • Download PPT / MP4")
+st.caption(
+    "Upload PPT → Edit narration → Preview voice → Sequential generation → Download"
+)
 
 st.divider()
 
@@ -56,7 +57,7 @@ Create narration suitable for self-directed learning.
 Rules:
 - Start exactly with: "{NARRATION_PREFIX}"
 - No headings
-- No bullets
+- No bullet points
 - Conversational teaching tone
 
 Slide content:
@@ -70,6 +71,7 @@ Slide content:
 
 
 def openai_tts(text: str, out_mp3: Path, speed: int):
+    # OpenAI TTS (speed approximated via instruction)
     paced_text = f"Speak at {speed}% speed. {text}"
 
     with client.audio.speech.with_streaming_response.create(
@@ -81,7 +83,7 @@ def openai_tts(text: str, out_mp3: Path, speed: int):
 
 
 def add_audio_to_slide(slide, audio_path: Path):
-    # Official python-pptx supported way (audio as movie)
+    # Official python-pptx supported approach
     slide.shapes.add_movie(
         movie_file=str(audio_path),
         left=Inches(0.3),
@@ -92,12 +94,11 @@ def add_audio_to_slide(slide, audio_path: Path):
     )
 
 # ================= FILE UPLOAD ====================
-ppt_file = st.file_uploader("📤 Upload PPTX", type=["pptx"])
+ppt_file = st.file_uploader("📤 Upload PPTX (any size)", type=["pptx"])
 
 if ppt_file and not st.session_state.ppt_loaded:
-    if ppt_file.size > MAX_FILE_MB * 1024 * 1024:
-        st.error("❌ File too large. Use sequential processing.")
-        st.stop()
+    # NO SIZE RESTRICTION — sequential processing handles large files
+    st.info("📄 PPT uploaded. Preparing slides sequentially…")
 
     workdir = Path(tempfile.mkdtemp())
     ppt_path = workdir / ppt_file.name
@@ -156,13 +157,13 @@ if st.session_state.ppt_loaded:
                     slide["duration"] = audio.duration_seconds
                     st.audio(f.name)
 
-# ================= SEQUENTIAL FINAL GENERATION =================
+# ================= FINAL GENERATION (SEQUENTIAL) =================
 st.divider()
 
 if st.session_state.ppt_loaded:
     col1, col2 = st.columns(2)
 
-    # ---------- PPT WITH VOICE (SEQUENTIAL) ----------
+    # ---------- PPT WITH VOICE ----------
     with col1:
         if st.button("📥 Generate & Download PPT with Voice-over"):
             prs = Presentation(st.session_state.ppt_path)
@@ -192,7 +193,7 @@ if st.session_state.ppt_loaded:
                 progress.progress(idx / total)
                 time.sleep(0.1)
 
-            status.success("✅ All slides processed")
+            status.success("✅ All slides processed successfully")
 
             final_ppt = outdir / st.session_state.ppt_name
             prs.save(final_ppt)
