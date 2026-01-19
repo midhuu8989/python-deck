@@ -59,7 +59,6 @@ def get_slide_title(slide) -> str:
 
 def generate_narration(slide_text: str, slide_index: int, slide_title: str = "") -> str:
     if slide_index == 0:
-        # FIRST SLIDE SPECIAL CASE
         prompt = f"""
 Generate narration for self-directed learning.
 
@@ -127,7 +126,6 @@ if ppt_file and not st.session_state.ppt_loaded:
 
         slide_title = get_slide_title(slide)
 
-        # ---- FIRST SLIDE: TITLE-BASED NARRATION ----
         if idx == 0 and not is_text_clear(slide_text):
             notes = generate_narration("", idx, slide_title)
             st.session_state.slides.append({
@@ -138,7 +136,6 @@ if ppt_file and not st.session_state.ppt_loaded:
             })
             continue
 
-        # ---- OTHER SLIDES ----
         if not is_text_clear(slide_text):
             st.session_state.slides.append({
                 "index": idx,
@@ -149,7 +146,7 @@ if ppt_file and not st.session_state.ppt_loaded:
             continue
 
         notes = ""
-        if slide.has_notes_slide:
+        if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
             notes = slide.notes_slide.notes_text_frame.text.strip()
 
         if not notes:
@@ -189,8 +186,7 @@ if st.session_state.ppt_loaded:
 
             if st.button("▶ Preview Voice", key=f"preview_{slide['index']}"):
                 with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-                    with st.spinner("Generating voice…"):
-                        openai_tts(slide["notes"], Path(f.name))
+                    openai_tts(slide["notes"], Path(f.name))
                     st.audio(f.name)
 
 # ================= FINAL GENERATION =================
@@ -199,7 +195,6 @@ st.divider()
 if st.session_state.ppt_loaded:
     col1, col2 = st.columns(2)
 
-    # ---- PPT DOWNLOAD ----
     with col1:
         if st.button("📥 Download PPT with Voice-over"):
             prs = Presentation(st.session_state.ppt_path)
@@ -223,7 +218,27 @@ if st.session_state.ppt_loaded:
 
                 openai_tts(slide_data["notes"], mp3_path)
                 add_audio_to_slide(slide, mp3_path)
-                slide.notes_slide.notes_text_frame.text = slide_data["notes"]
+
+                # ✅ BROKEN NOTES → REGENERATE → PROCEED
+                try:
+                    notes_slide = slide.notes_slide  # auto-create
+                    body = notes_slide.placeholders[1]
+                    body.text = slide_data["notes"]
+                except Exception:
+                    # regenerate narration & retry
+                    regenerated_notes = generate_narration(
+                        slide_data["text"],
+                        slide_data["index"],
+                        get_slide_title(slide)
+                    )
+                    slide_data["notes"] = regenerated_notes
+
+                    try:
+                        notes_slide = slide.notes_slide
+                        body = notes_slide.placeholders[1]
+                        body.text = regenerated_notes
+                    except Exception:
+                        pass  # last-resort ignore, audio still attached
 
                 progress.progress(done / total)
                 time.sleep(0.1)
@@ -238,7 +253,6 @@ if st.session_state.ppt_loaded:
                 mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
             )
 
-    # ---- MP4 PLACEHOLDER ----
     with col2:
         if st.button("🎞 Download MP4"):
             st.info(
