@@ -4,4 +4,6 @@ python-dotenv
 openai
 pydub
 moviepy
+requests==2.32.5
+
 
