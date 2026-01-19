@@ -1,6 +1,6 @@
 # -------------------------------------------------------------
-# Streamlit App: PPT Upload -> Edit Narration -> PPT with Voice
-# (Cloud-safe | OpenAI only | No FFmpeg / No pydub)
+# Streamlit App: PPT Upload -> Edit Narration -> PPT with Audio
+# (Cloud-safe | OpenAI TTS | NO video | NO private APIs)
 # -------------------------------------------------------------
 
 import os
@@ -9,8 +9,7 @@ from pathlib import Path
 
 import streamlit as st
 from pptx import Presentation
-from pptx.oxml import parse_xml
-from pptx.oxml.ns import nsdecls
+from pptx.util import Inches
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -29,7 +28,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # ================= UI ============================
 st.set_page_config(page_title="PPT Voice Narration", layout="wide")
 st.title("🎤 PPT Voice Narration Generator")
-st.caption("Generates PPT with embedded voice-over (Cloud-safe)")
+st.caption("Generates PPT with embedded voice-over (audio per slide)")
 
 # ================= SESSION STATE =================
 if "slides" not in st.session_state:
@@ -60,33 +59,19 @@ def text_to_speech(text: str, out_mp3: Path):
         response.stream_to_file(out_mp3)
 
 
-def embed_audio(slide, audio_path: Path):
-    audio_part = slide.part.package._add_media_part(
-        audio_path.read_bytes(),
-        content_type="audio/mpeg",
-    )
-
-    rId = slide.part.relate_to(
-        audio_part,
-        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/audio",
-    )
-
-    audio_xml = f"""
-    <p:pic {nsdecls('a','p','r')}>
-      <p:nvPicPr>
-        <p:cNvPr id="1" name="Narration"/>
-        <p:cNvPicPr/>
-        <p:nvPr>
-          <a:audioFile r:link="{rId}"/>
-        </p:nvPr>
-      </p:nvPicPr>
-      <p:blipFill/>
-      <p:spPr/>
-    </p:pic>
+def add_audio_to_slide(slide, audio_path: Path):
     """
-
-    slide.shapes._spTree.insert_element_before(
-        parse_xml(audio_xml), "p:extLst"
+    SAFE method: PowerPoint treats audio as a movie object.
+    This is the only supported way in python-pptx.
+    """
+    slide.shapes.add_movie(
+        movie_file=str(audio_path),
+        left=Inches(0.5),
+        top=Inches(0.5),
+        width=Inches(1),
+        height=Inches(1),
+        poster_frame_image=None,
+        mime_type="audio/mpeg",
     )
 
 # ================= UPLOAD PPT ====================
@@ -150,7 +135,7 @@ if st.session_state.slides:
             mp3 = work / f"slide_{s['index']}.mp3"
             text_to_speech(s["notes"], mp3)
 
-            embed_audio(slide, mp3)
+            add_audio_to_slide(slide, mp3)
             slide.notes_slide.notes_text_frame.text = s["notes"]
 
         final_ppt = work / st.session_state.ppt_name
@@ -163,9 +148,4 @@ if st.session_state.slides:
             final_ppt.read_bytes(),
             file_name=st.session_state.ppt_name,
             mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        )
-
-        st.warning(
-            "ℹ️ MP4 generation is disabled on Streamlit Cloud. "
-            "Run locally or via Docker for video export."
         )
