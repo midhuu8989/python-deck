@@ -1,6 +1,6 @@
 # -------------------------------------------------------------
 # Streamlit App: PPT → Voice Preview → Download PPT with Voice
-# (Skip slides with no/unclear text)
+# (Slide 1 title-based narration + skip unclear slides)
 # -------------------------------------------------------------
 
 # ===================== IMPORTS =====================
@@ -12,7 +12,6 @@ from pathlib import Path
 import streamlit as st
 from pptx import Presentation
 from pptx.util import Inches
-from pydub import AudioSegment
 
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -30,7 +29,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # ================= UI SETUP ======================
 st.set_page_config(page_title="PPT Voice Over Studio", layout="wide")
 st.title("🎤 PPT Voice Over Studio")
-st.caption("Narration only for slides with clear visible text")
+st.caption("Title-based narration for first slide • Skip unclear slides")
 
 st.divider()
 
@@ -46,23 +45,36 @@ if "ppt_name" not in st.session_state:
 
 # ================= HELPERS =======================
 def is_text_clear(text: str) -> bool:
-    """
-    Decide whether slide text is clear enough for narration
-    """
     return bool(text and len(text.strip()) >= 20)
 
 
-def generate_narration(slide_text: str, slide_index: int) -> str:
-    if slide_index == 0:
-        prefix = "Today we are going to start with "
-    else:
-        prefix = "In this slide we are going to look into "
+def get_slide_title(slide) -> str:
+    try:
+        if slide.shapes.title and slide.shapes.title.text.strip():
+            return slide.shapes.title.text.strip()
+    except Exception:
+        pass
+    return "the topic"
 
-    prompt = f"""
+
+def generate_narration(slide_text: str, slide_index: int, slide_title: str = "") -> str:
+    if slide_index == 0:
+        # FIRST SLIDE SPECIAL CASE
+        prompt = f"""
 Generate narration for self-directed learning.
 
 Rules:
-- Start exactly with: "{prefix}"
+- Start exactly with: "Today we are going to explore on {slide_title}"
+- Simple Indian teaching tone
+- No headings
+- No bullet points
+"""
+    else:
+        prompt = f"""
+Generate narration for self-directed learning.
+
+Rules:
+- Start exactly with: "In this slide we are going to look into "
 - Simple Indian teaching tone
 - No headings
 - No bullet points
@@ -70,6 +82,7 @@ Rules:
 Slide content:
 {slide_text}
 """
+
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
@@ -112,14 +125,26 @@ if ppt_file and not st.session_state.ppt_loaded:
             shape.text for shape in slide.shapes if hasattr(shape, "text")
         ).strip()
 
+        slide_title = get_slide_title(slide)
+
+        # ---- FIRST SLIDE: TITLE-BASED NARRATION ----
+        if idx == 0 and not is_text_clear(slide_text):
+            notes = generate_narration("", idx, slide_title)
+            st.session_state.slides.append({
+                "index": idx,
+                "text": slide_title,
+                "notes": notes,
+                "skip": False,
+            })
+            continue
+
+        # ---- OTHER SLIDES ----
         if not is_text_clear(slide_text):
-            # Skip narration for unclear slides
             st.session_state.slides.append({
                 "index": idx,
                 "text": slide_text,
                 "notes": "",
                 "skip": True,
-                "audio": None,
             })
             continue
 
@@ -135,7 +160,6 @@ if ppt_file and not st.session_state.ppt_loaded:
             "text": slide_text,
             "notes": notes,
             "skip": False,
-            "audio": None,
         })
 
     st.session_state.ppt_loaded = True
@@ -145,13 +169,13 @@ if ppt_file and not st.session_state.ppt_loaded:
 
 # ================= PREVIEW ========================
 if st.session_state.ppt_loaded:
-    st.subheader("🎧 Preview Voice (only for valid slides)")
+    st.subheader("🎧 Preview Voice")
 
     for slide in st.session_state.slides:
         with st.expander(f"Slide {slide['index'] + 1}", expanded=False):
 
             if slide["skip"]:
-                st.info("ℹ️ Narration skipped (no clear visible text on slide)")
+                st.info("ℹ️ Narration skipped (no clear visible text)")
                 continue
 
             st.write(slide["text"])
@@ -173,41 +197,51 @@ if st.session_state.ppt_loaded:
 st.divider()
 
 if st.session_state.ppt_loaded:
-    if st.button("📥 Generate & Download PPT with Voice-over"):
-        prs = Presentation(st.session_state.ppt_path)
-        outdir = Path(tempfile.mkdtemp())
+    col1, col2 = st.columns(2)
 
-        total = len(st.session_state.slides)
-        progress = st.progress(0.0)
-        status = st.empty()
+    # ---- PPT DOWNLOAD ----
+    with col1:
+        if st.button("📥 Download PPT with Voice-over"):
+            prs = Presentation(st.session_state.ppt_path)
+            outdir = Path(tempfile.mkdtemp())
 
-        processed = 0
-        for slide_data in st.session_state.slides:
-            processed += 1
-            status.info(f"🔄 Processing slide {processed} of {total}")
+            total = len(st.session_state.slides)
+            progress = st.progress(0.0)
+            status = st.empty()
 
-            if slide_data["skip"]:
-                progress.progress(processed / total)
-                continue
+            done = 0
+            for slide_data in st.session_state.slides:
+                done += 1
+                status.info(f"🔄 Processing slide {done} of {total}")
 
-            slide = prs.slides[slide_data["index"]]
-            mp3_path = outdir / f"slide_{slide_data['index']}.mp3"
+                if slide_data["skip"]:
+                    progress.progress(done / total)
+                    continue
 
-            openai_tts(slide_data["notes"], mp3_path)
-            add_audio_to_slide(slide, mp3_path)
-            slide.notes_slide.notes_text_frame.text = slide_data["notes"]
+                slide = prs.slides[slide_data["index"]]
+                mp3_path = outdir / f"slide_{slide_data['index']}.mp3"
 
-            progress.progress(processed / total)
-            time.sleep(0.1)
+                openai_tts(slide_data["notes"], mp3_path)
+                add_audio_to_slide(slide, mp3_path)
+                slide.notes_slide.notes_text_frame.text = slide_data["notes"]
 
-        status.success("✅ Voice-over added (skipped unclear slides)")
+                progress.progress(done / total)
+                time.sleep(0.1)
 
-        final_ppt = outdir / st.session_state.ppt_name
-        prs.save(final_ppt)
+            final_ppt = outdir / st.session_state.ppt_name
+            prs.save(final_ppt)
 
-        st.download_button(
-            "⬇ Download PPT with Voice-over",
-            final_ppt.read_bytes(),
-            file_name=st.session_state.ppt_name,
-            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        )
+            st.download_button(
+                "⬇ Download PPT with Voice-over",
+                final_ppt.read_bytes(),
+                file_name=st.session_state.ppt_name,
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            )
+
+    # ---- MP4 PLACEHOLDER ----
+    with col2:
+        if st.button("🎞 Download MP4"):
+            st.info(
+                "🚧 MP4 export is currently not available in the free deployment.\n\n"
+                "Please use the PPT with voice-over or deploy locally/Docker for MP4."
+            )
