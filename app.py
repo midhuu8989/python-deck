@@ -1,6 +1,5 @@
 # -------------------------------------------------------------
 # Streamlit App: PPT → Voice Preview → Download PPT with Voice
-# (Slide 1 title-based narration + skip unclear slides)
 # -------------------------------------------------------------
 
 # ===================== IMPORTS =====================
@@ -29,7 +28,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # ================= UI SETUP ======================
 st.set_page_config(page_title="PPT Voice Over Studio", layout="wide")
 st.title("🎤 PPT Voice Over Studio")
-st.caption("Title-based narration for first slide • Skip unclear slides")
+st.caption("Title-based narration • Corruption-safe • Cloud-safe")
 
 st.divider()
 
@@ -81,7 +80,6 @@ Rules:
 Slide content:
 {slide_text}
 """
-
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
@@ -89,13 +87,41 @@ Slide content:
     return response.choices[0].message.content.strip()
 
 
-def openai_tts(text: str, out_mp3: Path):
-    with client.audio.speech.with_streaming_response.create(
-        model="gpt-4o-mini-tts",
-        voice="alloy",
-        input=text,
-    ) as response:
-        response.stream_to_file(out_mp3)
+# ================= SAFE TTS ======================
+def chunk_text(text, max_chars=900):
+    chunks, current = [], ""
+    for sentence in text.split(". "):
+        if len(current) + len(sentence) < max_chars:
+            current += sentence + ". "
+        else:
+            chunks.append(current.strip())
+            current = sentence + ". "
+    if current.strip():
+        chunks.append(current.strip())
+    return chunks
+
+
+def openai_tts(text: str, out_mp3: Path, retries=3):
+    chunks = chunk_text(text)
+
+    with open(out_mp3, "wb") as f:
+        for chunk in chunks:
+            attempt = 0
+            while attempt < retries:
+                try:
+                    with client.audio.speech.with_streaming_response.create(
+                        model="gpt-4o-mini-tts",
+                        voice="alloy",
+                        input=chunk,
+                    ) as response:
+                        for audio_bytes in response.iter_bytes():
+                            f.write(audio_bytes)
+                    break
+                except Exception:
+                    attempt += 1
+                    time.sleep(2 * attempt)
+                    if attempt == retries:
+                        raise
 
 
 def add_audio_to_slide(slide, audio_path: Path):
@@ -128,33 +154,17 @@ if ppt_file and not st.session_state.ppt_loaded:
 
         if idx == 0 and not is_text_clear(slide_text):
             notes = generate_narration("", idx, slide_title)
+        elif not is_text_clear(slide_text):
             st.session_state.slides.append({
-                "index": idx,
-                "text": slide_title,
-                "notes": notes,
-                "skip": False,
+                "index": idx, "text": slide_text, "notes": "", "skip": True
             })
             continue
-
-        if not is_text_clear(slide_text):
-            st.session_state.slides.append({
-                "index": idx,
-                "text": slide_text,
-                "notes": "",
-                "skip": True,
-            })
-            continue
-
-        notes = ""
-        if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
-            notes = slide.notes_slide.notes_text_frame.text.strip()
-
-        if not notes:
+        else:
             notes = generate_narration(slide_text, idx)
 
         st.session_state.slides.append({
             "index": idx,
-            "text": slide_text,
+            "text": slide_text or slide_title,
             "notes": notes,
             "skip": False,
         })
@@ -169,14 +179,10 @@ if st.session_state.ppt_loaded:
     st.subheader("🎧 Preview Voice")
 
     for slide in st.session_state.slides:
-        with st.expander(f"Slide {slide['index'] + 1}", expanded=False):
+        if slide["skip"]:
+            continue
 
-            if slide["skip"]:
-                st.info("ℹ️ Narration skipped (no clear visible text)")
-                continue
-
-            st.write(slide["text"])
-
+        with st.expander(f"Slide {slide['index'] + 1}"):
             slide["notes"] = st.text_area(
                 "Narration Text",
                 slide["notes"],
@@ -186,76 +192,60 @@ if st.session_state.ppt_loaded:
 
             if st.button("▶ Preview Voice", key=f"preview_{slide['index']}"):
                 with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-                    openai_tts(slide["notes"], Path(f.name))
-                    st.audio(f.name)
+                    try:
+                        openai_tts(slide["notes"], Path(f.name))
+                        st.audio(f.name)
+                    except Exception:
+                        st.error("⚠️ Voice preview failed. Please retry.")
 
 # ================= FINAL GENERATION =================
 st.divider()
 
 if st.session_state.ppt_loaded:
-    col1, col2 = st.columns(2)
+    if st.button("📥 Download PPT with Voice-over"):
+        prs = Presentation(st.session_state.ppt_path)
+        outdir = Path(tempfile.mkdtemp())
 
-    with col1:
-        if st.button("📥 Download PPT with Voice-over"):
-            prs = Presentation(st.session_state.ppt_path)
-            outdir = Path(tempfile.mkdtemp())
+        total = len(st.session_state.slides)
+        progress = st.progress(0.0)
 
-            total = len(st.session_state.slides)
-            progress = st.progress(0.0)
-            status = st.empty()
+        for i, slide_data in enumerate(st.session_state.slides, start=1):
+            progress.progress(i / total)
 
-            done = 0
-            for slide_data in st.session_state.slides:
-                done += 1
-                status.info(f"🔄 Processing slide {done} of {total}")
+            if slide_data["skip"]:
+                continue
 
-                if slide_data["skip"]:
-                    progress.progress(done / total)
-                    continue
+            slide = prs.slides[slide_data["index"]]
+            mp3_path = outdir / f"slide_{slide_data['index']}.mp3"
 
-                slide = prs.slides[slide_data["index"]]
-                mp3_path = outdir / f"slide_{slide_data['index']}.mp3"
-
+            try:
                 openai_tts(slide_data["notes"], mp3_path)
                 add_audio_to_slide(slide, mp3_path)
+            except Exception:
+                st.warning(f"⚠️ Audio skipped for slide {slide_data['index'] + 1}")
 
-                # ✅ BROKEN NOTES → REGENERATE → PROCEED
+            # 🔁 Always regenerate notes if broken
+            try:
+                notes_slide = slide.notes_slide
+                notes_slide.placeholders[1].text = slide_data["notes"]
+            except Exception:
                 try:
-                    notes_slide = slide.notes_slide  # auto-create
-                    body = notes_slide.placeholders[1]
-                    body.text = slide_data["notes"]
-                except Exception:
-                    # regenerate narration & retry
-                    regenerated_notes = generate_narration(
+                    regenerated = generate_narration(
                         slide_data["text"],
                         slide_data["index"],
                         get_slide_title(slide)
                     )
-                    slide_data["notes"] = regenerated_notes
+                    slide_data["notes"] = regenerated
+                    slide.notes_slide.placeholders[1].text = regenerated
+                except Exception:
+                    pass
 
-                    try:
-                        notes_slide = slide.notes_slide
-                        body = notes_slide.placeholders[1]
-                        body.text = regenerated_notes
-                    except Exception:
-                        pass  # last-resort ignore, audio still attached
+        final_ppt = outdir / st.session_state.ppt_name
+        prs.save(final_ppt)
 
-                progress.progress(done / total)
-                time.sleep(0.1)
-
-            final_ppt = outdir / st.session_state.ppt_name
-            prs.save(final_ppt)
-
-            st.download_button(
-                "⬇ Download PPT with Voice-over",
-                final_ppt.read_bytes(),
-                file_name=st.session_state.ppt_name,
-                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            )
-
-    with col2:
-        if st.button("🎞 Download MP4"):
-            st.info(
-                "🚧 MP4 export is currently not available in the free deployment.\n\n"
-                "Please use the PPT with voice-over or deploy locally/Docker for MP4."
-            )
+        st.download_button(
+            "⬇ Download PPT with Voice-over",
+            final_ppt.read_bytes(),
+            file_name=st.session_state.ppt_name,
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        )
