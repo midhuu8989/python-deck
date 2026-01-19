@@ -1,0 +1,7 @@
+streamlit
+python-pptx
+python-dotenv
+openai
+pydub
+moviepy
+
