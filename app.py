@@ -1,5 +1,6 @@
 # -------------------------------------------------------------
-# Streamlit App: PPT → Voice Preview → Download PPT (Auto-play)
+# Streamlit App: PPT → Voice Preview → Download PPT with Voice
+# (Skip slides with no/unclear text)
 # -------------------------------------------------------------
 
 # ===================== IMPORTS =====================
@@ -26,10 +27,10 @@ if not OPENAI_API_KEY:
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ================= UI =============================
+# ================= UI SETUP ======================
 st.set_page_config(page_title="PPT Voice Over Studio", layout="wide")
 st.title("🎤 PPT Voice Over Studio")
-st.caption("Auto-play voice • Preview before download • Skip unclear slides")
+st.caption("Narration only for slides with clear visible text")
 
 st.divider()
 
@@ -45,15 +46,17 @@ if "ppt_name" not in st.session_state:
 
 # ================= HELPERS =======================
 def is_text_clear(text: str) -> bool:
+    """
+    Decide whether slide text is clear enough for narration
+    """
     return bool(text and len(text.strip()) >= 20)
 
 
 def generate_narration(slide_text: str, slide_index: int) -> str:
-    prefix = (
-        "Today we are going to start with "
-        if slide_index == 0
-        else "In this slide we are going to look into "
-    )
+    if slide_index == 0:
+        prefix = "Today we are going to start with "
+    else:
+        prefix = "In this slide we are going to look into "
 
     prompt = f"""
 Generate narration for self-directed learning.
@@ -84,7 +87,7 @@ def openai_tts(text: str, out_mp3: Path):
 
 
 def add_audio_to_slide(slide, audio_path: Path):
-    movie = slide.shapes.add_movie(
+    slide.shapes.add_movie(
         movie_file=str(audio_path),
         left=Inches(0.3),
         top=Inches(0.3),
@@ -93,74 +96,62 @@ def add_audio_to_slide(slide, audio_path: Path):
         mime_type="audio/mpeg",
     )
 
-    # ✅ AUTO-PLAY AUDIO WHEN SLIDE OPENS
-    movie.media_format.play_settings.play_on_entry = True
-
 # ================= FILE UPLOAD ====================
 ppt_file = st.file_uploader("📤 Upload PPTX", type=["pptx"])
 
 if ppt_file and not st.session_state.ppt_loaded:
-    st.info("📄 File uploaded. Preparing slides, please wait…")
+    workdir = Path(tempfile.mkdtemp())
+    ppt_path = workdir / ppt_file.name
+    ppt_path.write_bytes(ppt_file.read())
 
-    spinner = st.spinner("Reading slides and preparing narration…")
-    progress = st.progress(0.0)
-    status = st.empty()
+    prs = Presentation(ppt_path)
+    st.session_state.slides.clear()
 
-    with spinner:
-        workdir = Path(tempfile.mkdtemp())
-        ppt_path = workdir / ppt_file.name
-        ppt_path.write_bytes(ppt_file.read())
+    for idx, slide in enumerate(prs.slides):
+        slide_text = " ".join(
+            shape.text for shape in slide.shapes if hasattr(shape, "text")
+        ).strip()
 
-        prs = Presentation(ppt_path)
-        st.session_state.slides.clear()
+        if not is_text_clear(slide_text):
+            # Skip narration for unclear slides
+            st.session_state.slides.append({
+                "index": idx,
+                "text": slide_text,
+                "notes": "",
+                "skip": True,
+                "audio": None,
+            })
+            continue
 
-        total = len(prs.slides)
-        for idx, slide in enumerate(prs.slides, start=1):
-            status.info(f"Processing slide {idx} of {total}")
+        notes = ""
+        if slide.has_notes_slide:
+            notes = slide.notes_slide.notes_text_frame.text.strip()
 
-            slide_text = " ".join(
-                shape.text for shape in slide.shapes if hasattr(shape, "text")
-            ).strip()
+        if not notes:
+            notes = generate_narration(slide_text, idx)
 
-            if not is_text_clear(slide_text):
-                st.session_state.slides.append({
-                    "index": idx - 1,
-                    "text": slide_text,
-                    "notes": "",
-                    "skip": True,
-                })
-            else:
-                notes = ""
-                if slide.has_notes_slide:
-                    notes = slide.notes_slide.notes_text_frame.text.strip()
-
-                if not notes:
-                    notes = generate_narration(slide_text, idx - 1)
-
-                st.session_state.slides.append({
-                    "index": idx - 1,
-                    "text": slide_text,
-                    "notes": notes,
-                    "skip": False,
-                })
-
-            progress.progress(idx / total)
-            time.sleep(0.05)
+        st.session_state.slides.append({
+            "index": idx,
+            "text": slide_text,
+            "notes": notes,
+            "skip": False,
+            "audio": None,
+        })
 
     st.session_state.ppt_loaded = True
     st.session_state.ppt_path = ppt_path
     st.session_state.ppt_name = ppt_file.name
-    status.success("✅ PPT ready for preview")
+    st.success("✅ PPT loaded successfully")
 
 # ================= PREVIEW ========================
 if st.session_state.ppt_loaded:
-    st.subheader("🎧 Preview Voice (valid slides only)")
+    st.subheader("🎧 Preview Voice (only for valid slides)")
 
     for slide in st.session_state.slides:
         with st.expander(f"Slide {slide['index'] + 1}", expanded=False):
 
             if slide["skip"]:
-                st.info("ℹ️ Narration skipped (no clear visible text)")
+                st.info("ℹ️ Narration skipped (no clear visible text on slide)")
                 continue
 
             st.write(slide["text"])
@@ -182,7 +173,7 @@ if st.session_state.ppt_loaded:
 st.divider()
 
 if st.session_state.ppt_loaded:
-    if st.button("📥 Generate & Download PPT with Auto-Play Voice"):
+    if st.button("📥 Generate & Download PPT with Voice-over"):
         prs = Presentation(st.session_state.ppt_path)
         outdir = Path(tempfile.mkdtemp())
 
@@ -193,7 +184,7 @@ if st.session_state.ppt_loaded:
         processed = 0
         for slide_data in st.session_state.slides:
             processed += 1
-            status.info(f"Adding voice to slide {processed} of {total}")
+            status.info(f"🔄 Processing slide {processed} of {total}")
 
             if slide_data["skip"]:
                 progress.progress(processed / total)
@@ -209,13 +200,13 @@ if st.session_state.ppt_loaded:
             progress.progress(processed / total)
             time.sleep(0.1)
 
-        status.success("✅ Voice-over added (auto-play enabled)")
+        status.success("✅ Voice-over added (skipped unclear slides)")
 
         final_ppt = outdir / st.session_state.ppt_name
         prs.save(final_ppt)
 
         st.download_button(
-            "⬇ Download PPT with Auto-Play Voice",
+            "⬇ Download PPT with Voice-over",
             final_ppt.read_bytes(),
             file_name=st.session_state.ppt_name,
             mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
