@@ -56,7 +56,7 @@ def get_slide_title(slide) -> str:
     return ""
 
 
-def generate_intro_narration(title: str) -> str:
+def generate_slide1_narration(title: str) -> str:
     prompt = f"""
 Generate narration for self-directed learning.
 
@@ -76,8 +76,19 @@ Rules:
     return response.choices[0].message.content.strip()
 
 
-def generate_narration(slide_text: str, slide_index: int) -> str:
-    prompt = f"""
+def generate_narration(slide_text: str, slide_index: int, slide_title: str = "") -> str:
+    if slide_index == 0:
+        prompt = f"""
+Generate narration for self-directed learning.
+
+Rules:
+- Start exactly with: "Today we are going to explore on {slide_title}"
+- Simple Indian teaching tone
+- No headings
+- No bullet points
+"""
+    else:
+        prompt = f"""
 Generate narration for self-directed learning.
 
 Rules:
@@ -161,14 +172,14 @@ if ppt_file and not st.session_state.ppt_loaded:
 
         slide_title = get_slide_title(slide)
 
-        # 🔥 UPDATED SLIDE 1 LOGIC (ONLY CHANGE)
+        # 🔥 ONLY CHANGE: SLIDE 1 EXTENDED TITLE-BASED NARRATION
         if idx == 0:
             if slide_title and len(slide_title.strip()) >= 5:
-                notes = generate_intro_narration(slide_title)
+                notes = generate_slide1_narration(slide_title)
                 skip = False
             else:
-                skip = True
                 notes = ""
+                skip = True
 
         elif not is_text_clear(slide_text):
             skip = True
@@ -237,9 +248,13 @@ if st.session_state.ppt_loaded:
             try:
                 openai_tts(slide_data["notes"], mp3_path)
                 add_audio_to_slide(slide, mp3_path)
-                slide.notes_slide.notes_text_frame.text = slide_data["notes"]
             except Exception:
                 st.warning(f"⚠️ Audio skipped for slide {slide_data['index'] + 1}")
+
+            try:
+                slide.notes_slide.notes_text_frame.text = slide_data["notes"]
+            except Exception:
+                pass
 
         final_ppt = outdir / st.session_state.ppt_name
         prs.save(final_ppt)
