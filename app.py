@@ -59,16 +59,26 @@ def get_slide_title(slide) -> str:
 def generate_narration(slide_text: str, slide_index: int, slide_title: str = "") -> str:
     if slide_index == 0:
         prompt = f"""
-Generate narration for self-directed learning.
+You are generating narration ONLY for the topic given below.
 
-Rules:
+TOPIC (from slide title — this is the ONLY topic allowed):
+"{slide_title}"
+
+STRICT RULES (MANDATORY):
 - Start exactly with: "Today we are going to explore on {slide_title}"
+- Explain ONLY this topic
+- Do NOT talk about emotional intelligence, soft skills, psychology, leadership, or any unrelated subject
+- If the topic is technical, stay technical
+- If the topic is business-related, stay business-related
+- Do NOT generalize beyond the topic
 - Simple Indian teaching tone
 - No headings
 - No bullet points
-- Explain the topic clearly
-- Add why this topic is important
-- Explain 2 to 3 real-life or industry use cases
+
+Content requirements:
+- Explain what "{slide_title}" means
+- Explain why "{slide_title}" is important
+- Explain 2 to 3 real-life or industry use cases of "{slide_title}"
 - Make it slightly longer than other slides
 """
     else:
@@ -84,11 +94,13 @@ Rules:
 Slide content:
 {slide_text}
 """
+
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
     )
     return response.choices[0].message.content.strip()
+
 
 
 # ================= SAFE TTS ======================
