@@ -1,5 +1,5 @@
 # -------------------------------------------------------------
-# Streamlit App: PPT → Fully Narrated Voice PPT (CLOUD SAFE)
+# Streamlit App: PPT → Fully Narrated Voice PPT (STABLE FINAL)
 # -------------------------------------------------------------
 
 import os
@@ -31,7 +31,7 @@ if not openai_client and not groq_client:
 # ================= UI =============================
 st.set_page_config(page_title="PPT Voice Over Studio", layout="wide")
 st.title("🎤 PPT Voice Over Studio")
-st.caption("Cloud-safe • No SDK errors • All slides narrated")
+st.caption("Notes-safe • Cloud-safe • All slides narrated")
 
 st.divider()
 
@@ -87,7 +87,7 @@ Simple Indian teaching tone.
 {text}"""
     )
 
-# ================= TTS (gTTS – STABLE) ============
+# ================= TTS ============================
 def generate_audio(text: str, out_mp3: Path):
     tts = gTTS(text=text, lang="en", slow=False)
     tts.save(str(out_mp3))
@@ -170,7 +170,14 @@ if st.session_state.ppt_loaded:
 
             generate_audio(slide_data["notes"], mp3)
             add_audio_to_slide(slide, mp3)
-            slide.notes_slide.notes_text_frame.text = slide_data["notes"]
+
+            # ✅ EXPLICIT NOTES CREATION (NO ERROR)
+            if slide.notes_slide is None:
+                notes_slide = slide.notes_slide
+            else:
+                notes_slide = slide.notes_slide
+
+            notes_slide.notes_text_frame.text = slide_data["notes"]
 
             progress.progress((i + 1) / total)
 
