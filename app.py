@@ -1,5 +1,5 @@
 # -------------------------------------------------------------
-# PPT → Narration → Audio → Download PPT (SELF LEARNING)
+# PPT → Notes → Narration → Voice → Download (SELF LEARNING)
 # -------------------------------------------------------------
 
 import os
@@ -22,18 +22,18 @@ OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
 
 if not ELEVENLABS_API_KEY:
-    st.error("ElevenLabs API key missing")
+    st.error("❌ ElevenLabs API key missing")
     st.stop()
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-# ================= UI ==================
-st.set_page_config(page_title="PPT Self Learning Narrator")
+# ================= UI =================
+st.set_page_config(page_title="PPT Self Learning Narrator", layout="wide")
 st.title("🎓 PPT Self Learning Narrator")
-st.caption("Upload PPT → Auto narration → Audio embedded → Download")
+st.caption("Uses Notes → Generates narration → Embeds voice → Download PPT")
 
-# ================= HELPERS ==================
+# ================= HELPERS =================
 def get_slide_text(slide):
     texts = []
     for shape in slide.shapes:
@@ -42,11 +42,19 @@ def get_slide_text(slide):
     return " ".join(texts)
 
 def get_notes_text_frame(slide):
-    # Always creates notes slide if not present
-    return slide.notes_slide.notes_text_frame
+    return slide.notes_slide.notes_text_frame  # auto-creates
 
-def read_notes_text(notes_tf):
-    return " ".join(p.text for p in notes_tf.paragraphs).strip()
+def read_notes_safely(notes_tf):
+    try:
+        if hasattr(notes_tf, "paragraphs"):
+            return " ".join(p.text for p in notes_tf.paragraphs).strip()
+    except Exception:
+        pass
+
+    try:
+        return notes_tf.text.strip()
+    except Exception:
+        return ""
 
 def call_llm(prompt):
     if openai_client:
@@ -68,14 +76,25 @@ def call_llm(prompt):
 
     return "This slide explains the given topic in simple terms."
 
-def generate_narration(slide_text):
+def generate_slide1_narration(title):
+    return call_llm(
+        f"""
+Today we are going to explore on {title}.
+Explain what this topic is.
+Explain where it is used in real life.
+Simple Indian teaching tone.
+3 to 4 sentences.
+"""
+    )
+
+def generate_narration(text):
     return call_llm(
         f"""
 Create narration for self learning.
 Simple Indian teaching tone.
 3 to 4 sentences.
 Content:
-{slide_text}
+{text}
 """
     )
 
@@ -113,8 +132,8 @@ def add_audio(slide, audio_path):
         mime_type="audio/mpeg",
     )
 
-# ================= MAIN ==================
-ppt_file = st.file_uploader("Upload PPTX", type=["pptx"])
+# ================= MAIN =================
+ppt_file = st.file_uploader("📤 Upload PPTX", type=["pptx"])
 
 if ppt_file:
     workdir = Path(tempfile.mkdtemp())
@@ -123,27 +142,59 @@ if ppt_file:
 
     prs = Presentation(ppt_path)
 
+    st.subheader("📝 Review & Edit Narration")
+
+    slide_data = []
+
     for idx, slide in enumerate(prs.slides):
         notes_tf = get_notes_text_frame(slide)
+        existing_notes = read_notes_safely(notes_tf)
 
-        narration = read_notes_text(notes_tf)
+        if not existing_notes:
+            if idx == 0:
+                title = slide.shapes.title.text if slide.shapes.title else "this topic"
+                narration = generate_slide1_narration(title)
+            else:
+                narration = generate_narration(get_slide_text(slide))
+        else:
+            narration = existing_notes
 
-        if not narration:
-            slide_text = get_slide_text(slide)
-            narration = generate_narration(slide_text)
-            notes_tf.text = narration  # safe write
+        slide_data.append((idx, narration))
 
-        audio_path = workdir / f"slide_{idx}.mp3"
-        elevenlabs_tts(narration, audio_path)
-        add_audio(slide, audio_path)
+    # UI for preview & edit
+    for idx, narration in slide_data:
+        with st.expander(f"Slide {idx + 1}"):
+            updated_text = st.text_area(
+                "Narration / Notes",
+                narration,
+                height=120,
+                key=f"note_{idx}",
+            )
 
-    final_ppt = workdir / ppt_file.name
-    prs.save(final_ppt)
+            if st.button("▶ Preview Voice", key=f"preview_{idx}"):
+                tmp = workdir / f"preview_{idx}.mp3"
+                elevenlabs_tts(updated_text, tmp)
+                st.audio(str(tmp))
 
-    st.success("✅ PPT narration completed")
-    st.download_button(
-        "⬇ Download PPT with Audio",
-        final_ppt.read_bytes(),
-        file_name=ppt_file.name,
-        mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    )
+            slide_data[idx] = (idx, updated_text)
+
+    if st.button("📥 Generate & Download PPT with Audio"):
+        for idx, narration in slide_data:
+            slide = prs.slides[idx]
+            notes_tf = get_notes_text_frame(slide)
+            notes_tf.text = narration
+
+            audio_path = workdir / f"slide_{idx}.mp3"
+            elevenlabs_tts(narration, audio_path)
+            add_audio(slide, audio_path)
+
+        final_ppt = workdir / ppt_file.name
+        prs.save(final_ppt)
+
+        st.success("✅ PPT generated successfully")
+        st.download_button(
+            "⬇ Download PPT with Audio",
+            final_ppt.read_bytes(),
+            file_name=ppt_file.name,
+            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        )
