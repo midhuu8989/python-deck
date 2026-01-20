@@ -1,5 +1,5 @@
 # -------------------------------------------------------------
-# Streamlit App: PPT → Fully Narrated Voice PPT (STABLE FINAL)
+# Streamlit App: PPT → Fully Narrated Voice PPT (ULTRA STABLE)
 # -------------------------------------------------------------
 
 import os
@@ -31,7 +31,7 @@ if not openai_client and not groq_client:
 # ================= UI =============================
 st.set_page_config(page_title="PPT Voice Over Studio", layout="wide")
 st.title("🎤 PPT Voice Over Studio")
-st.caption("Notes-safe • Cloud-safe • All slides narrated")
+st.caption("Chunk-safe • Retry-safe • Cloud-safe")
 
 st.divider()
 
@@ -60,7 +60,7 @@ def call_llm(prompt: str) -> str:
             )
             return r.choices[0].message.content.strip()
         except Exception:
-            pass  # silent fallback
+            pass
 
     if groq_client:
         r = groq_client.chat.completions.create(
@@ -87,10 +87,26 @@ Simple Indian teaching tone.
 {text}"""
     )
 
-# ================= TTS ============================
-def generate_audio(text: str, out_mp3: Path):
-    tts = gTTS(text=text, lang="en", slow=False)
-    tts.save(str(out_mp3))
+# ================= TTS (FIXED) ====================
+def generate_audio(text: str, out_mp3: Path, retries=3, max_chars=450):
+    clean_text = " ".join(text.split())
+    chunks = [
+        clean_text[i:i + max_chars]
+        for i in range(0, len(clean_text), max_chars)
+    ]
+
+    with open(out_mp3, "wb") as f:
+        for chunk in chunks:
+            attempt = 0
+            while attempt < retries:
+                try:
+                    tts = gTTS(text=chunk, lang="en", slow=False)
+                    tts.write_to_fp(f)
+                    break
+                except Exception:
+                    attempt += 1
+                    if attempt == retries:
+                        raise
 
 def add_audio_to_slide(slide, audio_path):
     slide.shapes.add_movie(
@@ -171,12 +187,7 @@ if st.session_state.ppt_loaded:
             generate_audio(slide_data["notes"], mp3)
             add_audio_to_slide(slide, mp3)
 
-            # ✅ EXPLICIT NOTES CREATION (NO ERROR)
-            if slide.notes_slide is None:
-                notes_slide = slide.notes_slide
-            else:
-                notes_slide = slide.notes_slide
-
+            notes_slide = slide.notes_slide
             notes_slide.notes_text_frame.text = slide_data["notes"]
 
             progress.progress((i + 1) / total)
