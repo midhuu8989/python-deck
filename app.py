@@ -59,13 +59,24 @@ def get_slide_title(slide) -> str:
 def generate_narration(slide_text: str, slide_index: int, slide_title: str = "") -> str:
     if slide_index == 0:
         prompt = f"""
-Generate narration for self-directed learning.
+You must generate narration ONLY based on the given title.
+
+TITLE:
+{slide_title}
+
+MANDATORY START (exact wording, no change):
+"Today we are going to explore on {slide_title}. Explanation of {slide_title} and its use cases in real life."
 
 Rules:
-- Start exactly with: "Today we are going to explore on {slide_title}"
+- Use ONLY the topic "{slide_title}"
+- Do NOT introduce unrelated topics
 - Simple Indian teaching tone
 - No headings
 - No bullet points
+- After the mandatory start line, explain:
+  - What "{slide_title}" is
+  - Why it is important
+  - 2 to 3 real-life or industry use cases
 """
     else:
         prompt = f"""
@@ -85,6 +96,7 @@ Slide content:
         messages=[{"role": "user", "content": prompt}],
     )
     return response.choices[0].message.content.strip()
+
 
 
 # ================= SAFE TTS ======================
