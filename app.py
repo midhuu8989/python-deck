@@ -50,11 +50,13 @@ def read_notes_safely(notes_tf):
             return " ".join(p.text for p in notes_tf.paragraphs).strip()
     except Exception:
         pass
+    return ""
 
-    try:
-        return notes_tf.text.strip()
-    except Exception:
-        return ""
+def write_notes_safely(notes_tf, text):
+    # ✅ SAFE WRITE (FIXES YOUR ERROR)
+    notes_tf.clear()
+    p = notes_tf.add_paragraph()
+    p.text = text
 
 def call_llm(prompt):
     if openai_client:
@@ -142,8 +144,6 @@ if ppt_file:
 
     prs = Presentation(ppt_path)
 
-    st.subheader("📝 Review & Edit Narration")
-
     slide_data = []
 
     for idx, slide in enumerate(prs.slides):
@@ -161,7 +161,6 @@ if ppt_file:
 
         slide_data.append((idx, narration))
 
-    # UI for preview & edit
     for idx, narration in slide_data:
         with st.expander(f"Slide {idx + 1}"):
             updated_text = st.text_area(
@@ -182,7 +181,9 @@ if ppt_file:
         for idx, narration in slide_data:
             slide = prs.slides[idx]
             notes_tf = get_notes_text_frame(slide)
-            notes_tf.text = narration
+
+            # ✅ FIXED LINE
+            write_notes_safely(notes_tf, narration)
 
             audio_path = workdir / f"slide_{idx}.mp3"
             elevenlabs_tts(narration, audio_path)
