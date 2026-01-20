@@ -1,5 +1,5 @@
 # -------------------------------------------------------------
-# Streamlit App: PPT → Fully Narrated Voice PPT (ULTRA STABLE)
+# Streamlit App: PPT → Fully Narrated Voice PPT (ELEVENLABS TTS)
 # -------------------------------------------------------------
 
 import os
@@ -13,27 +13,45 @@ from pptx.util import Inches
 from dotenv import load_dotenv
 from groq import Groq
 from openai import OpenAI
-from gtts import gTTS
+from elevenlabs import generate, save, set_api_key
 
 # ===================== ENV ========================
 load_dotenv()
 
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
+ELEVENLABS_API_KEY = st.secrets.get("ELEVENLABS_API_KEY") or os.getenv("ELEVENLABS_API_KEY")
+
+if not ELEVENLABS_API_KEY:
+    st.error("❌ ElevenLabs API key missing")
+    st.stop()
+
+set_api_key(ELEVENLABS_API_KEY)
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-if not openai_client and not groq_client:
-    st.error("❌ No LLM key configured")
-    st.stop()
-
 # ================= UI =============================
 st.set_page_config(page_title="PPT Voice Over Studio", layout="wide")
 st.title("🎤 PPT Voice Over Studio")
-st.caption("Chunk-safe • Retry-safe • Cloud-safe")
+st.caption("ElevenLabs Neural TTS • Stable • SCORM Ready")
 
 st.divider()
+
+# ================= SIDEBAR ========================
+st.sidebar.header("🎙 Voice Settings")
+
+voice_type = st.sidebar.radio(
+    "Voice Type",
+    ["Female", "Male"]
+)
+
+VOICE_MAP = {
+    "Female": "Rachel",
+    "Male": "Adam"
+}
+
+selected_voice = VOICE_MAP[voice_type]
 
 # ================= SESSION ========================
 if "slides" not in st.session_state:
@@ -87,26 +105,14 @@ Simple Indian teaching tone.
 {text}"""
     )
 
-# ================= TTS (FIXED) ====================
-def generate_audio(text: str, out_mp3: Path, retries=3, max_chars=450):
-    clean_text = " ".join(text.split())
-    chunks = [
-        clean_text[i:i + max_chars]
-        for i in range(0, len(clean_text), max_chars)
-    ]
-
-    with open(out_mp3, "wb") as f:
-        for chunk in chunks:
-            attempt = 0
-            while attempt < retries:
-                try:
-                    tts = gTTS(text=chunk, lang="en", slow=False)
-                    tts.write_to_fp(f)
-                    break
-                except Exception:
-                    attempt += 1
-                    if attempt == retries:
-                        raise
+# ================= ELEVENLABS TTS =================
+def generate_audio(text: str, out_mp3: Path):
+    audio = generate(
+        text=text,
+        voice=selected_voice,
+        model="eleven_monolingual_v1"
+    )
+    save(audio, str(out_mp3))
 
 def add_audio_to_slide(slide, audio_path):
     slide.shapes.add_movie(
@@ -187,6 +193,7 @@ if st.session_state.ppt_loaded:
             generate_audio(slide_data["notes"], mp3)
             add_audio_to_slide(slide, mp3)
 
+            # create notes safely
             notes_slide = slide.notes_slide
             notes_slide.notes_text_frame.text = slide_data["notes"]
 
