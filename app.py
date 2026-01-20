@@ -62,7 +62,6 @@ def get_slide_title(slide) -> str:
 
 # ================= LLM SAFE CALL ==================
 def call_llm(prompt: str) -> str:
-    # Try OpenAI first
     if openai_client:
         try:
             response = openai_client.chat.completions.create(
@@ -70,13 +69,12 @@ def call_llm(prompt: str) -> str:
                 messages=[{"role": "user", "content": prompt}],
             )
             return response.choices[0].message.content.strip()
-        except Exception as e:
+        except Exception:
             st.warning("⚠️ OpenAI failed, switching to Groq...")
 
-    # Fallback to Groq
     if groq_client:
         response = groq_client.chat.completions.create(
-            model="llama3-8b-8192",
+            model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
         )
         return response.choices[0].message.content.strip()
@@ -180,7 +178,6 @@ if ppt_file and not st.session_state.ppt_loaded:
 
         slide_title = get_slide_title(slide)
 
-        # 🔹 SLIDE 1 LOGIC (UNCHANGED)
         if idx == 0:
             if slide_title and len(slide_title.strip()) >= 5:
                 notes = generate_slide1_narration(slide_title)
