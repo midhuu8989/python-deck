@@ -1,16 +1,9 @@
 # -------------------------------------------------------------
-# Streamlit App: PPT → Voice Preview → Download PPT with Voice
-# Features:
-# - Silent OpenAI → Groq fallback
-# - All slides narrated
-# - Indian Male/Female voice
-# - Speed & pitch control
+# Streamlit App: PPT → Fully Narrated Voice PPT
 # -------------------------------------------------------------
 
-# ===================== IMPORTS =====================
 import os
 import tempfile
-import time
 from pathlib import Path
 
 import streamlit as st
@@ -34,27 +27,19 @@ if not OPENAI_API_KEY and not GROQ_API_KEY:
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
-# ================= UI SETUP ======================
+# ================= UI =============================
 st.set_page_config(page_title="PPT Voice Over Studio", layout="wide")
 st.title("🎤 PPT Voice Over Studio")
-st.caption("Fully narrated • LMS ready • SCORM safe")
+st.caption("No alerts • No skipped slides • LMS ready")
 
 st.divider()
 
-# ================= SIDEBAR CONTROLS =================
-st.sidebar.header("🎛 Voice Controls")
+# ================= SIDEBAR ========================
+st.sidebar.header("🎙 Voice Settings")
 
 voice_type = st.sidebar.radio(
     "Voice Type",
     ["Indian Female", "Indian Male"]
-)
-
-speech_rate = st.sidebar.slider(
-    "Speech Speed", 0.75, 1.25, 1.0, step=0.05
-)
-
-pitch = st.sidebar.slider(
-    "Voice Pitch", -5, 5, 0
 )
 
 VOICE_MAP = {
@@ -64,115 +49,75 @@ VOICE_MAP = {
 
 selected_voice = VOICE_MAP[voice_type]
 
-# ================= SESSION STATE =================
+# (UI only – future ready)
+st.sidebar.slider("Speech Speed (future)", 0.75, 1.25, 1.0)
+st.sidebar.slider("Pitch (future)", -5, 5, 0)
+
+# ================= SESSION ========================
 if "slides" not in st.session_state:
     st.session_state.slides = []
 if "ppt_loaded" not in st.session_state:
     st.session_state.ppt_loaded = False
-if "ppt_path" not in st.session_state:
-    st.session_state.ppt_path = None
-if "ppt_name" not in st.session_state:
-    st.session_state.ppt_name = None
 
-# ================= HELPERS =======================
-def is_text_clear(text: str) -> bool:
-    return bool(text and len(text.strip()) >= 20)
-
-def get_slide_title(slide) -> str:
+# ================= HELPERS ========================
+def get_slide_title(slide):
     try:
-        if slide.shapes.title and slide.shapes.title.text.strip():
+        if slide.shapes.title:
             return slide.shapes.title.text.strip()
     except Exception:
         pass
     return ""
 
-# ================= LLM SAFE CALL ==================
+# ================= LLM ============================
 def call_llm(prompt: str) -> str:
     if openai_client:
         try:
-            response = openai_client.chat.completions.create(
+            r = openai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}],
             )
-            return response.choices[0].message.content.strip()
+            return r.choices[0].message.content.strip()
         except Exception:
-            pass  # Silent fallback
+            pass
 
     if groq_client:
-        response = groq_client.chat.completions.create(
+        r = groq_client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
         )
-        return response.choices[0].message.content.strip()
+        return r.choices[0].message.content.strip()
 
     raise RuntimeError("No LLM available")
 
-# ================= NARRATION ======================
-def generate_slide1_narration(title: str) -> str:
-    prompt = f"""
-Generate narration for self-directed learning.
+def generate_intro(title):
+    return call_llm(
+        f"""Generate narration.
+Start exactly with: Today we are going to explore on {title}
+Simple Indian teaching tone.
+3 to 4 sentences."""
+    )
 
-Rules:
-- Start exactly with: "Today we are going to explore on {title}"
-- Simple Indian teaching tone
-- Explain what this topic is
-- Explain real-life usage
-- 3 to 4 sentences only
-"""
-    return call_llm(prompt)
+def generate_narration(text):
+    return call_llm(
+        f"""Generate narration.
+Start exactly with: In this slide we are going to look into
+Simple Indian teaching tone.
+{text}"""
+    )
 
-def generate_narration(slide_text: str) -> str:
-    prompt = f"""
-Generate narration for self-directed learning.
-
-Rules:
-- Start exactly with: "In this slide we are going to look into "
-- Simple Indian teaching tone
-- No bullets or headings
-
-Slide content:
-{slide_text}
-"""
-    return call_llm(prompt)
-
-# ================= TTS ============================
-def chunk_text(text, max_chars=900):
-    chunks, current = [], ""
-    for sentence in text.split(". "):
-        if len(current) + len(sentence) < max_chars:
-            current += sentence + ". "
-        else:
-            chunks.append(current.strip())
-            current = sentence + ". "
-    if current.strip():
-        chunks.append(current.strip())
-    return chunks
-
-def openai_tts(text: str, out_mp3: Path, retries=3):
-    chunks = chunk_text(text)
+# ================= TTS (FIXED) ====================
+def openai_tts(text: str, out_mp3: Path):
+    response = openai_client.audio.speech.create(
+        model="gpt-4o-mini-tts",
+        voice=selected_voice,
+        input=text,
+        format="mp3",
+    )
 
     with open(out_mp3, "wb") as f:
-        for chunk in chunks:
-            attempt = 0
-            while attempt < retries:
-                try:
-                    with openai_client.audio.speech.with_streaming_response.create(
-                        model="gpt-4o-mini-tts",
-                        voice=selected_voice,
-                        input=chunk,
-                        rate=speech_rate,
-                        pitch=pitch,
-                    ) as response:
-                        for audio_bytes in response.iter_bytes():
-                            f.write(audio_bytes)
-                    break
-                except Exception:
-                    attempt += 1
-                    time.sleep(2 * attempt)
-                    if attempt == retries:
-                        raise
+        f.write(response.read())
 
-def add_audio_to_slide(slide, audio_path: Path):
+def add_audio_to_slide(slide, audio_path):
     slide.shapes.add_movie(
         movie_file=str(audio_path),
         left=Inches(0.2),
@@ -182,80 +127,79 @@ def add_audio_to_slide(slide, audio_path: Path):
         mime_type="audio/mpeg",
     )
 
-# ================= FILE UPLOAD ====================
+# ================= UPLOAD =========================
 ppt_file = st.file_uploader("📤 Upload PPTX", type=["pptx"])
 
 if ppt_file and not st.session_state.ppt_loaded:
-    workdir = Path(tempfile.mkdtemp())
-    ppt_path = workdir / ppt_file.name
+    temp_dir = Path(tempfile.mkdtemp())
+    ppt_path = temp_dir / ppt_file.name
     ppt_path.write_bytes(ppt_file.read())
 
     prs = Presentation(ppt_path)
     st.session_state.slides.clear()
 
-    for idx, slide in enumerate(prs.slides):
+    for i, slide in enumerate(prs.slides):
         slide_text = " ".join(
             shape.text for shape in slide.shapes if hasattr(shape, "text")
         ).strip()
 
-        slide_title = get_slide_title(slide)
+        title = get_slide_title(slide)
 
-        if idx == 0 and slide_title:
-            notes = generate_slide1_narration(slide_title)
+        if i == 0 and title:
+            notes = generate_intro(title)
         else:
-            notes = generate_narration(slide_text or slide_title)
+            notes = generate_narration(slide_text or title)
 
         st.session_state.slides.append({
-            "index": idx,
-            "text": slide_text or slide_title,
+            "index": i,
             "notes": notes,
         })
 
     st.session_state.ppt_loaded = True
     st.session_state.ppt_path = ppt_path
     st.session_state.ppt_name = ppt_file.name
-    st.success("✅ PPT loaded & narration generated")
+
+    st.success("✅ Narration generated for all slides")
 
 # ================= PREVIEW ========================
 if st.session_state.ppt_loaded:
-    st.subheader("🎧 Preview & Edit Narration")
+    st.subheader("🎧 Preview Narration")
 
     for slide in st.session_state.slides:
         with st.expander(f"Slide {slide['index'] + 1}"):
             slide["notes"] = st.text_area(
                 "Narration",
                 slide["notes"],
-                key=f"notes_{slide['index']}",
-                height=120,
+                key=f"n_{slide['index']}",
             )
 
-            if st.button("▶ Preview Voice", key=f"preview_{slide['index']}"):
-                with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-                    openai_tts(slide["notes"], Path(f.name))
-                    st.audio(f.name)
+            if st.button("▶ Preview", key=f"p_{slide['index']}"):
+                tmp = Path(tempfile.mktemp(suffix=".mp3"))
+                openai_tts(slide["notes"], tmp)
+                st.audio(str(tmp))
 
-# ================= FINAL GENERATION =================
+# ================= FINAL ==========================
 st.divider()
 
 if st.session_state.ppt_loaded:
     if st.button("📥 Download PPT with Voice-over"):
         prs = Presentation(st.session_state.ppt_path)
-        outdir = Path(tempfile.mkdtemp())
+        out_dir = Path(tempfile.mkdtemp())
 
         progress = st.progress(0.0)
         total = len(st.session_state.slides)
 
-        for i, slide_data in enumerate(st.session_state.slides, start=1):
-            progress.progress(i / total)
-
+        for i, slide_data in enumerate(st.session_state.slides):
             slide = prs.slides[slide_data["index"]]
-            mp3_path = outdir / f"slide_{slide_data['index']}.mp3"
+            mp3 = out_dir / f"slide_{i}.mp3"
 
-            openai_tts(slide_data["notes"], mp3_path)
-            add_audio_to_slide(slide, mp3_path)
+            openai_tts(slide_data["notes"], mp3)
+            add_audio_to_slide(slide, mp3)
             slide.notes_slide.notes_text_frame.text = slide_data["notes"]
 
-        final_ppt = outdir / st.session_state.ppt_name
+            progress.progress((i + 1) / total)
+
+        final_ppt = out_dir / st.session_state.ppt_name
         prs.save(final_ppt)
 
         st.download_button(
