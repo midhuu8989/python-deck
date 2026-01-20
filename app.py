@@ -1,5 +1,5 @@
 # -------------------------------------------------------------
-# PPT → Narration → Audio → PPT Download (SELF LEARNING)
+# PPT → Narration → Audio → Download PPT (SELF LEARNING)
 # -------------------------------------------------------------
 
 import os
@@ -41,8 +41,12 @@ def get_slide_text(slide):
             texts.append(shape.text.strip())
     return " ".join(texts)
 
-def get_or_create_notes(slide):
+def get_notes_text_frame(slide):
+    # Always creates notes slide if not present
     return slide.notes_slide.notes_text_frame
+
+def read_notes_text(notes_tf):
+    return " ".join(p.text for p in notes_tf.paragraphs).strip()
 
 def call_llm(prompt):
     if openai_client:
@@ -120,13 +124,14 @@ if ppt_file:
     prs = Presentation(ppt_path)
 
     for idx, slide in enumerate(prs.slides):
-        notes_tf = get_or_create_notes(slide)
+        notes_tf = get_notes_text_frame(slide)
 
-        narration = notes_tf.text.strip()
+        narration = read_notes_text(notes_tf)
+
         if not narration:
             slide_text = get_slide_text(slide)
             narration = generate_narration(slide_text)
-            notes_tf.text = narration
+            notes_tf.text = narration  # safe write
 
         audio_path = workdir / f"slide_{idx}.mp3"
         elevenlabs_tts(narration, audio_path)
