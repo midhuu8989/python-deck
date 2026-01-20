@@ -53,22 +53,11 @@ def get_slide_title(slide) -> str:
             return slide.shapes.title.text.strip()
     except Exception:
         pass
-    return "the topic"
+    return ""
 
 
-def generate_narration(slide_text: str, slide_index: int, slide_title: str = "") -> str:
-    if slide_index == 0:
-        prompt = f"""
-Generate narration for self-directed learning.
-
-Rules:
-- Start exactly with: "Today we are going to explore on {slide_title}"
-- Simple Indian teaching tone
-- No headings
-- No bullet points
-"""
-    else:
-        prompt = f"""
+def generate_narration(slide_text: str, slide_index: int) -> str:
+    prompt = f"""
 Generate narration for self-directed learning.
 
 Rules:
@@ -152,21 +141,28 @@ if ppt_file and not st.session_state.ppt_loaded:
 
         slide_title = get_slide_title(slide)
 
-        if idx == 0 and not is_text_clear(slide_text):
-            notes = generate_narration("", idx, slide_title)
+        # 🔥 ONLY CHANGE: STRICT TITLE-BASED FIRST SLIDE
+        if idx == 0:
+            if slide_title and len(slide_title.strip()) >= 5:
+                notes = f"Today we are going to explore {slide_title}"
+                skip = False
+            else:
+                skip = True
+                notes = ""
+
         elif not is_text_clear(slide_text):
-            st.session_state.slides.append({
-                "index": idx, "text": slide_text, "notes": "", "skip": True
-            })
-            continue
+            skip = True
+            notes = ""
+
         else:
             notes = generate_narration(slide_text, idx)
+            skip = False
 
         st.session_state.slides.append({
             "index": idx,
             "text": slide_text or slide_title,
             "notes": notes,
-            "skip": False,
+            "skip": skip,
         })
 
     st.session_state.ppt_loaded = True
@@ -221,24 +217,9 @@ if st.session_state.ppt_loaded:
             try:
                 openai_tts(slide_data["notes"], mp3_path)
                 add_audio_to_slide(slide, mp3_path)
+                slide.notes_slide.notes_text_frame.text = slide_data["notes"]
             except Exception:
                 st.warning(f"⚠️ Audio skipped for slide {slide_data['index'] + 1}")
-
-            # 🔁 Always regenerate notes if broken
-            try:
-                notes_slide = slide.notes_slide
-                notes_slide.placeholders[1].text = slide_data["notes"]
-            except Exception:
-                try:
-                    regenerated = generate_narration(
-                        slide_data["text"],
-                        slide_data["index"],
-                        get_slide_title(slide)
-                    )
-                    slide_data["notes"] = regenerated
-                    slide.notes_slide.placeholders[1].text = regenerated
-                except Exception:
-                    pass
 
         final_ppt = outdir / st.session_state.ppt_name
         prs.save(final_ppt)
