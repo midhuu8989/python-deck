@@ -1,10 +1,11 @@
 # -------------------------------------------------------------
-# Streamlit App: PPT → Fully Narrated Voice PPT (ELEVENLABS TTS)
+# Streamlit App: PPT → Fully Narrated Voice PPT (ELEVENLABS)
 # -------------------------------------------------------------
 
 import os
 import tempfile
 from pathlib import Path
+import requests
 
 import streamlit as st
 from pptx import Presentation
@@ -13,7 +14,6 @@ from pptx.util import Inches
 from dotenv import load_dotenv
 from groq import Groq
 from openai import OpenAI
-from elevenlabs import generate, save, set_api_key
 
 # ===================== ENV ========================
 load_dotenv()
@@ -26,15 +26,13 @@ if not ELEVENLABS_API_KEY:
     st.error("❌ ElevenLabs API key missing")
     st.stop()
 
-set_api_key(ELEVENLABS_API_KEY)
-
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # ================= UI =============================
 st.set_page_config(page_title="PPT Voice Over Studio", layout="wide")
 st.title("🎤 PPT Voice Over Studio")
-st.caption("ElevenLabs Neural TTS • Stable • SCORM Ready")
+st.caption("ElevenLabs TTS • Stable • SCORM Ready")
 
 st.divider()
 
@@ -46,12 +44,12 @@ voice_type = st.sidebar.radio(
     ["Female", "Male"]
 )
 
-VOICE_MAP = {
-    "Female": "Rachel",
-    "Male": "Adam"
+VOICE_ID_MAP = {
+    "Female": "21m00Tcm4TlvDq8ikWAM",  # Rachel
+    "Male": "29vD33N1CtxCmqQRPOHJ",    # Adam
 }
 
-selected_voice = VOICE_MAP[voice_type]
+selected_voice_id = VOICE_ID_MAP[voice_type]
 
 # ================= SESSION ========================
 if "slides" not in st.session_state:
@@ -105,14 +103,29 @@ Simple Indian teaching tone.
 {text}"""
     )
 
-# ================= ELEVENLABS TTS =================
+# ================= ELEVENLABS TTS (REST – SAFE) ===
 def generate_audio(text: str, out_mp3: Path):
-    audio = generate(
-        text=text,
-        voice=selected_voice,
-        model="eleven_monolingual_v1"
-    )
-    save(audio, str(out_mp3))
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{selected_voice_id}"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "audio/mpeg",
+    }
+
+    payload = {
+        "text": text,
+        "model_id": "eleven_monolingual_v1",
+        "voice_settings": {
+            "stability": 0.6,
+            "similarity_boost": 0.75
+        }
+    }
+
+    response = requests.post(url, json=payload, headers=headers)
+    response.raise_for_status()
+
+    with open(out_mp3, "wb") as f:
+        f.write(response.content)
 
 def add_audio_to_slide(slide, audio_path):
     slide.shapes.add_movie(
@@ -193,7 +206,6 @@ if st.session_state.ppt_loaded:
             generate_audio(slide_data["notes"], mp3)
             add_audio_to_slide(slide, mp3)
 
-            # create notes safely
             notes_slide = slide.notes_slide
             notes_slide.notes_text_frame.text = slide_data["notes"]
 
