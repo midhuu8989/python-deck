@@ -1,5 +1,5 @@
 # -------------------------------------------------------------
-# Streamlit App: PPT → Fully Narrated Voice PPT (STABLE)
+# Streamlit App: PPT → Fully Narrated Voice PPT (CLOUD SAFE)
 # -------------------------------------------------------------
 
 import os
@@ -11,8 +11,9 @@ from pptx import Presentation
 from pptx.util import Inches
 
 from dotenv import load_dotenv
-from openai import OpenAI
 from groq import Groq
+from openai import OpenAI
+from gtts import gTTS
 
 # ===================== ENV ========================
 load_dotenv()
@@ -20,34 +21,19 @@ load_dotenv()
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
 
-if not OPENAI_API_KEY and not GROQ_API_KEY:
-    st.error("❌ Neither OPENAI_API_KEY nor GROQ_API_KEY configured")
-    st.stop()
-
 openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+
+if not openai_client and not groq_client:
+    st.error("❌ No LLM key configured")
+    st.stop()
 
 # ================= UI =============================
 st.set_page_config(page_title="PPT Voice Over Studio", layout="wide")
 st.title("🎤 PPT Voice Over Studio")
-st.caption("Stable • Silent fallback • No skipped slides")
+st.caption("Cloud-safe • No SDK errors • All slides narrated")
 
 st.divider()
-
-# ================= SIDEBAR ========================
-st.sidebar.header("🎙 Voice Settings")
-
-voice_type = st.sidebar.radio(
-    "Voice Type",
-    ["Indian Female", "Indian Male"]
-)
-
-VOICE_MAP = {
-    "Indian Female": "alloy",
-    "Indian Male": "verse"
-}
-
-selected_voice = VOICE_MAP[voice_type]
 
 # ================= SESSION ========================
 if "slides" not in st.session_state:
@@ -101,17 +87,10 @@ Simple Indian teaching tone.
 {text}"""
     )
 
-# ================= TTS (FIXED & STABLE) ===========
-def openai_tts(text: str, out_mp3: Path):
-    audio_bytes = openai_client.audio.speech.create(
-        model="gpt-4o-mini-tts",
-        voice=selected_voice,
-        input=text,
-        format="mp3",
-    )
-
-    with open(out_mp3, "wb") as f:
-        f.write(audio_bytes)
+# ================= TTS (gTTS – STABLE) ============
+def generate_audio(text: str, out_mp3: Path):
+    tts = gTTS(text=text, lang="en", slow=False)
+    tts.save(str(out_mp3))
 
 def add_audio_to_slide(slide, audio_path):
     slide.shapes.add_movie(
@@ -171,7 +150,7 @@ if st.session_state.ppt_loaded:
 
             if st.button("▶ Preview", key=f"p_{slide['index']}"):
                 tmp = Path(tempfile.mktemp(suffix=".mp3"))
-                openai_tts(slide["notes"], tmp)
+                generate_audio(slide["notes"], tmp)
                 st.audio(str(tmp))
 
 # ================= FINAL ==========================
@@ -189,7 +168,7 @@ if st.session_state.ppt_loaded:
             slide = prs.slides[slide_data["index"]]
             mp3 = out_dir / f"slide_{i}.mp3"
 
-            openai_tts(slide_data["notes"], mp3)
+            generate_audio(slide_data["notes"], mp3)
             add_audio_to_slide(slide, mp3)
             slide.notes_slide.notes_text_frame.text = slide_data["notes"]
 
