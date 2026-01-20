@@ -14,16 +14,20 @@ from pptx.util import Inches
 
 from dotenv import load_dotenv
 from openai import OpenAI
+from groq import Groq
 
 # ===================== ENV ========================
 load_dotenv()
-OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 
-if not OPENAI_API_KEY:
-    st.error("❌ OPENAI_API_KEY not configured")
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+GROQ_API_KEY = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
+
+if not OPENAI_API_KEY and not GROQ_API_KEY:
+    st.error("❌ Neither OPENAI_API_KEY nor GROQ_API_KEY configured")
     st.stop()
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # ================= UI SETUP ======================
 st.set_page_config(page_title="PPT Voice Over Studio", layout="wide")
@@ -56,6 +60,30 @@ def get_slide_title(slide) -> str:
     return ""
 
 
+# ================= LLM SAFE CALL ==================
+def call_llm(prompt: str) -> str:
+    # Try OpenAI first
+    if openai_client:
+        try:
+            response = openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            st.warning("⚠️ OpenAI failed, switching to Groq...")
+
+    # Fallback to Groq
+    if groq_client:
+        response = groq_client.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.choices[0].message.content.strip()
+
+    raise RuntimeError("No LLM available")
+
+
 def generate_slide1_narration(title: str) -> str:
     prompt = f"""
 Generate narration for self-directed learning.
@@ -69,26 +97,11 @@ Rules:
 - No headings
 - No bullet points
 """
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response.choices[0].message.content.strip()
+    return call_llm(prompt)
 
 
-def generate_narration(slide_text: str, slide_index: int, slide_title: str = "") -> str:
-    if slide_index == 0:
-        prompt = f"""
-Generate narration for self-directed learning.
-
-Rules:
-- Start exactly with: "Today we are going to explore on {slide_title}"
-- Simple Indian teaching tone
-- No headings
-- No bullet points
-"""
-    else:
-        prompt = f"""
+def generate_narration(slide_text: str, slide_index: int) -> str:
+    prompt = f"""
 Generate narration for self-directed learning.
 
 Rules:
@@ -100,12 +113,7 @@ Rules:
 Slide content:
 {slide_text}
 """
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response.choices[0].message.content.strip()
-
+    return call_llm(prompt)
 
 # ================= SAFE TTS ======================
 def chunk_text(text, max_chars=900):
@@ -129,7 +137,7 @@ def openai_tts(text: str, out_mp3: Path, retries=3):
             attempt = 0
             while attempt < retries:
                 try:
-                    with client.audio.speech.with_streaming_response.create(
+                    with openai_client.audio.speech.with_streaming_response.create(
                         model="gpt-4o-mini-tts",
                         voice="alloy",
                         input=chunk,
@@ -172,7 +180,7 @@ if ppt_file and not st.session_state.ppt_loaded:
 
         slide_title = get_slide_title(slide)
 
-        # 🔥 ONLY CHANGE: SLIDE 1 EXTENDED TITLE-BASED NARRATION
+        # 🔹 SLIDE 1 LOGIC (UNCHANGED)
         if idx == 0:
             if slide_title and len(slide_title.strip()) >= 5:
                 notes = generate_slide1_narration(slide_title)
@@ -223,7 +231,7 @@ if st.session_state.ppt_loaded:
                         openai_tts(slide["notes"], Path(f.name))
                         st.audio(f.name)
                     except Exception:
-                        st.error("⚠️ Voice preview failed. Please retry.")
+                        st.error("⚠️ Voice preview failed.")
 
 # ================= FINAL GENERATION =================
 st.divider()
@@ -248,13 +256,9 @@ if st.session_state.ppt_loaded:
             try:
                 openai_tts(slide_data["notes"], mp3_path)
                 add_audio_to_slide(slide, mp3_path)
-            except Exception:
-                st.warning(f"⚠️ Audio skipped for slide {slide_data['index'] + 1}")
-
-            try:
                 slide.notes_slide.notes_text_frame.text = slide_data["notes"]
             except Exception:
-                pass
+                st.warning(f"⚠️ Audio skipped for slide {slide_data['index'] + 1}")
 
         final_ppt = outdir / st.session_state.ppt_name
         prs.save(final_ppt)
