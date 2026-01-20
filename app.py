@@ -56,6 +56,26 @@ def get_slide_title(slide) -> str:
     return ""
 
 
+def generate_intro_narration(title: str) -> str:
+    prompt = f"""
+Generate narration for self-directed learning.
+
+Rules:
+- Start exactly with: "Today we are going to explore on {title}"
+- Simple Indian teaching tone
+- Explain briefly what this topic is
+- Explain where it is used in real life
+- 3 to 4 sentences only
+- No headings
+- No bullet points
+"""
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.choices[0].message.content.strip()
+
+
 def generate_narration(slide_text: str, slide_index: int) -> str:
     prompt = f"""
 Generate narration for self-directed learning.
@@ -141,10 +161,10 @@ if ppt_file and not st.session_state.ppt_loaded:
 
         slide_title = get_slide_title(slide)
 
-        # 🔥 ONLY CHANGE: STRICT TITLE-BASED FIRST SLIDE
+        # 🔥 UPDATED SLIDE 1 LOGIC (ONLY CHANGE)
         if idx == 0:
             if slide_title and len(slide_title.strip()) >= 5:
-                notes = f"Today we are going to explore {slide_title}"
+                notes = generate_intro_narration(slide_title)
                 skip = False
             else:
                 skip = True
