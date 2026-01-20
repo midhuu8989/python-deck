@@ -1,5 +1,5 @@
 # -------------------------------------------------------------
-# Streamlit App: PPT → Fully Narrated Voice PPT
+# Streamlit App: PPT → Fully Narrated Voice PPT (STABLE)
 # -------------------------------------------------------------
 
 import os
@@ -30,7 +30,7 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 # ================= UI =============================
 st.set_page_config(page_title="PPT Voice Over Studio", layout="wide")
 st.title("🎤 PPT Voice Over Studio")
-st.caption("No alerts • No skipped slides • LMS ready")
+st.caption("Stable • Silent fallback • No skipped slides")
 
 st.divider()
 
@@ -48,10 +48,6 @@ VOICE_MAP = {
 }
 
 selected_voice = VOICE_MAP[voice_type]
-
-# (UI only – future ready)
-st.sidebar.slider("Speech Speed (future)", 0.75, 1.25, 1.0)
-st.sidebar.slider("Pitch (future)", -5, 5, 0)
 
 # ================= SESSION ========================
 if "slides" not in st.session_state:
@@ -78,7 +74,7 @@ def call_llm(prompt: str) -> str:
             )
             return r.choices[0].message.content.strip()
         except Exception:
-            pass
+            pass  # silent fallback
 
     if groq_client:
         r = groq_client.chat.completions.create(
@@ -105,9 +101,9 @@ Simple Indian teaching tone.
 {text}"""
     )
 
-# ================= TTS (FIXED) ====================
+# ================= TTS (FIXED & STABLE) ===========
 def openai_tts(text: str, out_mp3: Path):
-    response = openai_client.audio.speech.create(
+    audio_bytes = openai_client.audio.speech.create(
         model="gpt-4o-mini-tts",
         voice=selected_voice,
         input=text,
@@ -115,7 +111,7 @@ def openai_tts(text: str, out_mp3: Path):
     )
 
     with open(out_mp3, "wb") as f:
-        f.write(response.read())
+        f.write(audio_bytes)
 
 def add_audio_to_slide(slide, audio_path):
     slide.shapes.add_movie(
