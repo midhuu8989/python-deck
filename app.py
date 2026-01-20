@@ -1,201 +1,255 @@
 # -------------------------------------------------------------
-# PPT → Notes → Narration → Voice → Download (SELF LEARNING)
+# Streamlit App: PPT → Voice Preview → Download PPT with Voice
 # -------------------------------------------------------------
 
+# ===================== IMPORTS =====================
 import os
 import tempfile
+import time
 from pathlib import Path
-import requests
 
 import streamlit as st
 from pptx import Presentation
 from pptx.util import Inches
+
 from dotenv import load_dotenv
 from openai import OpenAI
-from groq import Groq
 
-# ================= ENV =================
+# ===================== ENV ========================
 load_dotenv()
-
-ELEVENLABS_API_KEY = st.secrets.get("ELEVENLABS_API_KEY") or os.getenv("ELEVENLABS_API_KEY")
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
-GROQ_API_KEY = st.secrets.get("GROQ_API_KEY") or os.getenv("GROQ_API_KEY")
 
-if not ELEVENLABS_API_KEY:
-    st.error("❌ ElevenLabs API key missing")
+if not OPENAI_API_KEY:
+    st.error("❌ OPENAI_API_KEY not configured")
     st.stop()
 
-openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ================= UI =================
-st.set_page_config(page_title="PPT Self Learning Narrator", layout="wide")
-st.title("🎓 PPT Self Learning Narrator")
-st.caption("Uses Notes → Generates narration → Embeds voice → Download PPT")
+# ================= UI SETUP ======================
+st.set_page_config(page_title="PPT Voice Over Studio", layout="wide")
+st.title("🎤 PPT Voice Over Studio")
+st.caption("Title-based narration • Corruption-safe • Cloud-safe")
 
-# ================= HELPERS =================
-def get_slide_text(slide):
-    texts = []
-    for shape in slide.shapes:
-        if hasattr(shape, "text") and shape.text.strip():
-            texts.append(shape.text.strip())
-    return " ".join(texts)
+st.divider()
 
-def get_notes_text_frame(slide):
-    return slide.notes_slide.notes_text_frame  # auto-creates
+# ================= SESSION STATE =================
+if "slides" not in st.session_state:
+    st.session_state.slides = []
+if "ppt_loaded" not in st.session_state:
+    st.session_state.ppt_loaded = False
+if "ppt_path" not in st.session_state:
+    st.session_state.ppt_path = None
+if "ppt_name" not in st.session_state:
+    st.session_state.ppt_name = None
 
-def read_notes_safely(notes_tf):
+# ================= HELPERS =======================
+def is_text_clear(text: str) -> bool:
+    return bool(text and len(text.strip()) >= 20)
+
+
+def get_slide_title(slide) -> str:
     try:
-        if hasattr(notes_tf, "paragraphs"):
-            return " ".join(p.text for p in notes_tf.paragraphs).strip()
+        if slide.shapes.title and slide.shapes.title.text.strip():
+            return slide.shapes.title.text.strip()
     except Exception:
         pass
-    return ""
+    return "the topic"
 
-def write_notes_safely(notes_tf, text):
-    # ✅ SAFE WRITE (FIXES YOUR ERROR)
-    notes_tf.clear()
-    p = notes_tf.add_paragraph()
-    p.text = text
 
-def call_llm(prompt):
-    if openai_client:
-        try:
-            r = openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return r.choices[0].message.content.strip()
-        except Exception:
-            pass
+def generate_narration(slide_text: str, slide_index: int, slide_title: str = "") -> str:
+    if slide_index == 0:
+        prompt = f"""
+Generate narration for self-directed learning.
 
-    if groq_client:
-        r = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return r.choices[0].message.content.strip()
-
-    return "This slide explains the given topic in simple terms."
-
-def generate_slide1_narration(title):
-    return call_llm(
-        f"""
-Today we are going to explore on {title}.
-Explain what this topic is.
-Explain where it is used in real life.
-Simple Indian teaching tone.
-3 to 4 sentences.
+Rules:
+- Start exactly with: "Today we are going to explore on {slide_title}"
+- Simple Indian teaching tone
+- No headings
+- No bullet points
+- Explain the topic clearly
+- Add why this topic is important
+- Explain 2 to 3 real-life or industry use cases
+- Make it slightly longer than other slides
 """
-    )
+    else:
+        prompt = f"""
+Generate narration for self-directed learning.
 
-def generate_narration(text):
-    return call_llm(
-        f"""
-Create narration for self learning.
-Simple Indian teaching tone.
-3 to 4 sentences.
-Content:
-{text}
+Rules:
+- Start exactly with: "In this slide we are going to look into "
+- Simple Indian teaching tone
+- No headings
+- No bullet points
+
+Slide content:
+{slide_text}
 """
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
     )
+    return response.choices[0].message.content.strip()
 
-def create_silent_mp3(path: Path):
-    silent = b"\xFF\xFB\x90\x64\x00\x0F\xFF\xFA\x92\x40\x00\x0F"
-    with open(path, "wb") as f:
-        f.write(silent)
 
-def elevenlabs_tts(text, out_mp3):
-    url = "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM"
-    headers = {
-        "xi-api-key": ELEVENLABS_API_KEY,
-        "Content-Type": "application/json",
-        "Accept": "audio/mpeg",
-    }
-    payload = {"text": text, "model_id": "eleven_monolingual_v1"}
-
-    try:
-        r = requests.post(url, json=payload, headers=headers, timeout=30)
-        if r.status_code == 200 and r.content:
-            with open(out_mp3, "wb") as f:
-                f.write(r.content)
+# ================= SAFE TTS ======================
+def chunk_text(text, max_chars=900):
+    chunks, current = [], ""
+    for sentence in text.split(". "):
+        if len(current) + len(sentence) < max_chars:
+            current += sentence + ". "
         else:
-            create_silent_mp3(out_mp3)
-    except Exception:
-        create_silent_mp3(out_mp3)
+            chunks.append(current.strip())
+            current = sentence + ". "
+    if current.strip():
+        chunks.append(current.strip())
+    return chunks
 
-def add_audio(slide, audio_path):
+
+def openai_tts(text: str, out_mp3: Path, retries=3):
+    chunks = chunk_text(text)
+
+    with open(out_mp3, "wb") as f:
+        for chunk in chunks:
+            attempt = 0
+            while attempt < retries:
+                try:
+                    with client.audio.speech.with_streaming_response.create(
+                        model="gpt-4o-mini-tts",
+                        voice="alloy",
+                        input=chunk,
+                    ) as response:
+                        for audio_bytes in response.iter_bytes():
+                            f.write(audio_bytes)
+                    break
+                except Exception:
+                    attempt += 1
+                    time.sleep(2 * attempt)
+                    if attempt == retries:
+                        raise
+
+
+def add_audio_to_slide(slide, audio_path: Path):
     slide.shapes.add_movie(
         movie_file=str(audio_path),
-        left=Inches(0.2),
-        top=Inches(0.2),
+        left=Inches(0.3),
+        top=Inches(0.3),
         width=Inches(1),
         height=Inches(1),
         mime_type="audio/mpeg",
     )
 
-# ================= MAIN =================
+# ================= FILE UPLOAD ====================
 ppt_file = st.file_uploader("📤 Upload PPTX", type=["pptx"])
 
-if ppt_file:
+if ppt_file and not st.session_state.ppt_loaded:
     workdir = Path(tempfile.mkdtemp())
     ppt_path = workdir / ppt_file.name
     ppt_path.write_bytes(ppt_file.read())
 
     prs = Presentation(ppt_path)
-
-    slide_data = []
+    st.session_state.slides.clear()
 
     for idx, slide in enumerate(prs.slides):
-        notes_tf = get_notes_text_frame(slide)
-        existing_notes = read_notes_safely(notes_tf)
+        slide_text = " ".join(
+            shape.text for shape in slide.shapes if hasattr(shape, "text")
+        ).strip()
 
-        if not existing_notes:
-            if idx == 0:
-                title = slide.shapes.title.text if slide.shapes.title else "this topic"
-                narration = generate_slide1_narration(title)
-            else:
-                narration = generate_narration(get_slide_text(slide))
+        slide_title = get_slide_title(slide)
+
+        if idx == 0 and not is_text_clear(slide_text):
+            notes = generate_narration("", idx, slide_title)
+        elif not is_text_clear(slide_text):
+            st.session_state.slides.append({
+                "index": idx, "text": slide_text, "notes": "", "skip": True
+            })
+            continue
         else:
-            narration = existing_notes
+            notes = generate_narration(slide_text, idx)
 
-        slide_data.append((idx, narration))
+        st.session_state.slides.append({
+            "index": idx,
+            "text": slide_text or slide_title,
+            "notes": notes,
+            "skip": False,
+        })
 
-    for idx, narration in slide_data:
-        with st.expander(f"Slide {idx + 1}"):
-            updated_text = st.text_area(
-                "Narration / Notes",
-                narration,
+    st.session_state.ppt_loaded = True
+    st.session_state.ppt_path = ppt_path
+    st.session_state.ppt_name = ppt_file.name
+    st.success("✅ PPT loaded successfully")
+
+# ================= PREVIEW ========================
+if st.session_state.ppt_loaded:
+    st.subheader("🎧 Preview Voice")
+
+    for slide in st.session_state.slides:
+        if slide["skip"]:
+            continue
+
+        with st.expander(f"Slide {slide['index'] + 1}"):
+
+            slide["notes"] = st.text_area(
+                "Narration Text",
+                slide["notes"],
+                key=f"notes_{slide['index']}",
                 height=120,
-                key=f"note_{idx}",
             )
 
-            if st.button("▶ Preview Voice", key=f"preview_{idx}"):
-                tmp = workdir / f"preview_{idx}.mp3"
-                elevenlabs_tts(updated_text, tmp)
-                st.audio(str(tmp))
+            if st.button("▶ Preview Voice", key=f"preview_{slide['index']}"):
+                with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+                    try:
+                        openai_tts(slide["notes"], Path(f.name))
+                        st.audio(f.name)
+                    except Exception:
+                        st.error("⚠️ Voice preview failed. Please retry.")
 
-            slide_data[idx] = (idx, updated_text)
+# ================= FINAL GENERATION =================
+st.divider()
 
-    if st.button("📥 Generate & Download PPT with Audio"):
-        for idx, narration in slide_data:
-            slide = prs.slides[idx]
-            notes_tf = get_notes_text_frame(slide)
+if st.session_state.ppt_loaded:
+    if st.button("📥 Download PPT with Voice-over"):
+        prs = Presentation(st.session_state.ppt_path)
+        outdir = Path(tempfile.mkdtemp())
 
-            # ✅ FIXED LINE
-            write_notes_safely(notes_tf, narration)
+        total = len(st.session_state.slides)
+        progress = st.progress(0.0)
 
-            audio_path = workdir / f"slide_{idx}.mp3"
-            elevenlabs_tts(narration, audio_path)
-            add_audio(slide, audio_path)
+        for i, slide_data in enumerate(st.session_state.slides, start=1):
+            progress.progress(i / total)
 
-        final_ppt = workdir / ppt_file.name
+            if slide_data["skip"]:
+                continue
+
+            slide = prs.slides[slide_data["index"]]
+            mp3_path = outdir / f"slide_{slide_data['index']}.mp3"
+
+            try:
+                openai_tts(slide_data["notes"], mp3_path)
+                add_audio_to_slide(slide, mp3_path)
+            except Exception:
+                st.warning(f"⚠️ Audio skipped for slide {slide_data['index'] + 1}")
+
+            try:
+                notes_slide = slide.notes_slide
+                notes_slide.placeholders[1].text = slide_data["notes"]
+            except Exception:
+                try:
+                    regenerated = generate_narration(
+                        slide_data["text"],
+                        slide_data["index"],
+                        get_slide_title(slide)
+                    )
+                    slide_data["notes"] = regenerated
+                    slide.notes_slide.placeholders[1].text = regenerated
+                except Exception:
+                    pass
+
+        final_ppt = outdir / st.session_state.ppt_name
         prs.save(final_ppt)
 
-        st.success("✅ PPT generated successfully")
         st.download_button(
-            "⬇ Download PPT with Audio",
+            "⬇ Download PPT with Voice-over",
             final_ppt.read_bytes(),
-            file_name=ppt_file.name,
+            file_name=st.session_state.ppt_name,
             mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         )
