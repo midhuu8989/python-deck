@@ -62,8 +62,7 @@ def generate_narration(slide_text: str, slide_index: int, slide_title: str = "")
 Generate narration for self-directed learning.
 
 Rules:
-- Start exactly with: "Today we are going to explore on {slide_title}".
--Explain on {slide_title} and its use cases in real life
+- Start exactly with: "Today we are going to explore on {slide_title}. Explain {slide_title} and its use cases in real life."
 - Simple Indian teaching tone
 - No headings
 - No bullet points
@@ -153,13 +152,16 @@ if ppt_file and not st.session_state.ppt_loaded:
 
         slide_title = get_slide_title(slide)
 
-        if idx == 0 and not is_text_clear(slide_text):
+        # ✅ FIX: Slide 1 ALWAYS uses title-based narration
+        if idx == 0:
             notes = generate_narration("", idx, slide_title)
+
         elif not is_text_clear(slide_text):
             st.session_state.slides.append({
                 "index": idx, "text": slide_text, "notes": "", "skip": True
             })
             continue
+
         else:
             notes = generate_narration(slide_text, idx)
 
@@ -225,7 +227,6 @@ if st.session_state.ppt_loaded:
             except Exception:
                 st.warning(f"⚠️ Audio skipped for slide {slide_data['index'] + 1}")
 
-            # 🔁 Always regenerate notes if broken
             try:
                 notes_slide = slide.notes_slide
                 notes_slide.placeholders[1].text = slide_data["notes"]
