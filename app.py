@@ -15,6 +15,8 @@ from pptx.util import Inches
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from pydub import AudioSegment
+
 # ===================== ENV ========================
 load_dotenv()
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
@@ -28,7 +30,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # ================= UI SETUP ======================
 st.set_page_config(page_title="PPT Voice Over Studio", layout="wide")
 st.title("🎤 PPT Voice Over Studio")
-st.caption("Title + Content based narration • Safe • Cloud-ready")
+st.caption("Title + Content based narration • Voice & Pitch Control")
 
 st.divider()
 
@@ -41,6 +43,27 @@ if "ppt_path" not in st.session_state:
     st.session_state.ppt_path = None
 if "ppt_name" not in st.session_state:
     st.session_state.ppt_name = None
+
+# ================= SIDEBAR CONTROLS =================
+st.sidebar.header("🎙 Voice Settings")
+
+voice_choice = st.sidebar.selectbox(
+    "Select Voice",
+    ["Male", "Female"]
+)
+
+pitch = st.sidebar.slider(
+    "Voice Pitch",
+    min_value=-6,
+    max_value=6,
+    value=0,
+    help="Negative = deeper voice, Positive = sharper voice"
+)
+
+VOICE_MAP = {
+    "Male": "alloy",
+    "Female": "verse"
+}
 
 # ================= HELPERS =======================
 def is_text_clear(text: str) -> bool:
@@ -57,27 +80,25 @@ def get_slide_title(slide) -> str:
 
 
 def generate_narration(slide_text: str, slide_index: int, slide_title: str) -> str:
-    if slide_index == 0:
-        start_line = f"Today we are going to explore {slide_title}. "
-    else:
-        start_line = f"In this slide we are going to explore {slide_title}. "
+    opening = (
+        f"Today we are going to explore {slide_title}. "
+        if slide_index == 0
+        else f"In this slide we are going to explore {slide_title}. "
+    )
 
     prompt = f"""
-Generate narration for self-directed learning.
+Generate narration ONLY for this slide.
 
-Tone:
-- Simple Indian teaching style
-- Conversational
+STRICT RULES:
+- Speak only about the slide title and content
+- Do NOT explain what a topic is
+- Do NOT give generic advice
+- Use simple Indian teaching tone
 - No headings
 - No bullet points
 
-Rules:
-- Always explain the slide title first
-- If slide content is meaningful, explain it with simple real-life examples
-- If slide content is missing or unclear, explain only the title and its importance
-
 Start exactly with:
-"{start_line}"
+"{opening}"
 
 Slide Title:
 {slide_title}
@@ -106,7 +127,19 @@ def chunk_text(text, max_chars=900):
     return chunks
 
 
-def openai_tts(text: str, out_mp3: Path, retries=3):
+def apply_pitch(audio_path: Path, pitch_change: int):
+    if pitch_change == 0:
+        return audio_path
+
+    audio = AudioSegment.from_mp3(audio_path)
+    new_sample_rate = int(audio.frame_rate * (2.0 ** (pitch_change / 12.0)))
+    pitched = audio._spawn(audio.raw_data, overrides={"frame_rate": new_sample_rate})
+    pitched = pitched.set_frame_rate(44100)
+    pitched.export(audio_path, format="mp3")
+    return audio_path
+
+
+def openai_tts(text: str, out_mp3: Path, voice: str, pitch_change: int, retries=3):
     chunks = chunk_text(text)
 
     with open(out_mp3, "wb") as f:
@@ -116,7 +149,7 @@ def openai_tts(text: str, out_mp3: Path, retries=3):
                 try:
                     with client.audio.speech.with_streaming_response.create(
                         model="gpt-4o-mini-tts",
-                        voice="alloy",
+                        voice=voice,
                         input=chunk,
                     ) as response:
                         for audio_bytes in response.iter_bytes():
@@ -127,6 +160,8 @@ def openai_tts(text: str, out_mp3: Path, retries=3):
                     time.sleep(2 * attempt)
                     if attempt == retries:
                         raise
+
+    apply_pitch(out_mp3, pitch_change)
 
 
 def add_audio_to_slide(slide, audio_path: Path):
@@ -151,24 +186,12 @@ if ppt_file and not st.session_state.ppt_loaded:
     st.session_state.slides.clear()
 
     for idx, slide in enumerate(prs.slides):
-
-        # Exclude title from content text
         slide_text = " ".join(
             shape.text for shape in slide.shapes
             if hasattr(shape, "text") and shape != slide.shapes.title
         ).strip()
 
         slide_title = get_slide_title(slide)
-
-        # Skip only if content unclear AND title exists
-        if not is_text_clear(slide_text) and not slide_title:
-            st.session_state.slides.append({
-                "index": idx,
-                "text": slide_text,
-                "notes": "",
-                "skip": True
-            })
-            continue
 
         notes = generate_narration(slide_text, idx, slide_title)
 
@@ -189,9 +212,6 @@ if st.session_state.ppt_loaded:
     st.subheader("🎧 Preview Voice")
 
     for slide in st.session_state.slides:
-        if slide["skip"]:
-            continue
-
         with st.expander(f"Slide {slide['index'] + 1}"):
             slide["notes"] = st.text_area(
                 "Narration Text",
@@ -203,10 +223,15 @@ if st.session_state.ppt_loaded:
             if st.button("▶ Preview Voice", key=f"preview_{slide['index']}"):
                 with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
                     try:
-                        openai_tts(slide["notes"], Path(f.name))
+                        openai_tts(
+                            slide["notes"],
+                            Path(f.name),
+                            VOICE_MAP[voice_choice],
+                            pitch,
+                        )
                         st.audio(f.name)
                     except Exception:
-                        st.error("⚠️ Voice preview failed. Please retry.")
+                        st.error("⚠️ Voice preview failed.")
 
 # ================= FINAL GENERATION =================
 st.divider()
@@ -222,21 +247,20 @@ if st.session_state.ppt_loaded:
         for i, slide_data in enumerate(st.session_state.slides, start=1):
             progress.progress(i / total)
 
-            if slide_data["skip"]:
-                continue
-
             slide = prs.slides[slide_data["index"]]
             mp3_path = outdir / f"slide_{slide_data['index']}.mp3"
 
-            try:
-                openai_tts(slide_data["notes"], mp3_path)
-                add_audio_to_slide(slide, mp3_path)
-            except Exception:
-                st.warning(f"⚠️ Audio skipped for slide {slide_data['index'] + 1}")
+            openai_tts(
+                slide_data["notes"],
+                mp3_path,
+                VOICE_MAP[voice_choice],
+                pitch,
+            )
+
+            add_audio_to_slide(slide, mp3_path)
 
             try:
-                notes_slide = slide.notes_slide
-                notes_slide.placeholders[1].text = slide_data["notes"]
+                slide.notes_slide.placeholders[1].text = slide_data["notes"]
             except Exception:
                 pass
 
