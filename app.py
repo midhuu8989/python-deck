@@ -46,7 +46,7 @@ if "ppt_name" not in st.session_state:
 # ================= SIDEBAR CONTROLS =================
 st.sidebar.header("🎙 Voice Settings")
 
-voice_choice = st.sidebar.selectbox("Select Voice", ["Male", "Female"])
+voice_choice = st.sidebar.selectbox("Select Voice", ["Female", "Male"])
 
 pitch = st.sidebar.slider(
     "Voice Pitch",
