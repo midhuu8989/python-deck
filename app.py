@@ -47,22 +47,19 @@ if "ppt_name" not in st.session_state:
 # ================= SIDEBAR CONTROLS =================
 st.sidebar.header("🎙 Voice Settings")
 
-voice_choice = st.sidebar.selectbox(
-    "Select Voice",
-    ["Male", "Female"]
-)
+voice_choice = st.sidebar.selectbox("Select Voice", ["Male", "Female"])
 
 pitch = st.sidebar.slider(
     "Voice Pitch",
     min_value=-6,
     max_value=6,
     value=0,
-    help="Negative = deeper voice, Positive = sharper voice"
+    help="Negative = deeper voice, Positive = sharper voice",
 )
 
 VOICE_MAP = {
     "Male": "alloy",
-    "Female": "verse"
+    "Female": "verse",
 }
 
 # ================= HELPERS =======================
@@ -71,37 +68,44 @@ def is_text_clear(text: str) -> bool:
 
 
 def get_slide_title(slide) -> str:
+    """
+    Always return a meaningful title.
+    NEVER return 'the topic'
+    """
     try:
         if slide.shapes.title and slide.shapes.title.text.strip():
             return slide.shapes.title.text.strip()
     except Exception:
         pass
-    return "the topic"
+    return "this slide"
 
 
 def generate_narration(slide_text: str, slide_index: int, slide_title: str) -> str:
+    title = slide_title.strip()
+
     opening = (
-        f"Today we are going to explore {slide_title}. "
+        f"Today we are going to explore {title}. "
         if slide_index == 0
-        else f"In this slide we are going to explore {slide_title}. "
+        else f"In this slide we are going to explore {title}. "
     )
 
     prompt = f"""
-Generate narration ONLY for this slide.
+You are narrating a PowerPoint slide.
 
-STRICT RULES:
-- Speak only about the slide title and content
-- Do NOT explain what a topic is
-- Do NOT give generic advice
-- Use simple Indian teaching tone
+STRICT RULES (must follow):
+- Use the slide title EXACTLY as provided
+- NEVER say 'the topic', 'this topic', or 'the concept'
+- Do NOT give generic explanations
+- Speak ONLY about the slide title and slide content
+- Simple Indian teaching tone
 - No headings
 - No bullet points
 
 Start exactly with:
 "{opening}"
 
-Slide Title:
-{slide_title}
+Slide Title (use this exact wording):
+{title}
 
 Slide Content:
 {slide_text}
@@ -187,7 +191,8 @@ if ppt_file and not st.session_state.ppt_loaded:
 
     for idx, slide in enumerate(prs.slides):
         slide_text = " ".join(
-            shape.text for shape in slide.shapes
+            shape.text
+            for shape in slide.shapes
             if hasattr(shape, "text") and shape != slide.shapes.title
         ).strip()
 
@@ -222,16 +227,13 @@ if st.session_state.ppt_loaded:
 
             if st.button("▶ Preview Voice", key=f"preview_{slide['index']}"):
                 with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-                    try:
-                        openai_tts(
-                            slide["notes"],
-                            Path(f.name),
-                            VOICE_MAP[voice_choice],
-                            pitch,
-                        )
-                        st.audio(f.name)
-                    except Exception:
-                        st.error("⚠️ Voice preview failed.")
+                    openai_tts(
+                        slide["notes"],
+                        Path(f.name),
+                        VOICE_MAP[voice_choice],
+                        pitch,
+                    )
+                    st.audio(f.name)
 
 # ================= FINAL GENERATION =================
 st.divider()
