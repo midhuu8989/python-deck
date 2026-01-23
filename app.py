@@ -97,6 +97,7 @@ Slide Content:
 
 
 
+
 '''def generate_narration(slide_text: str, slide_index: int, slide_title: str = "") -> str:
     if slide_index == 0:
         prompt = f"""
