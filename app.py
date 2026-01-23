@@ -28,7 +28,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # ================= UI SETUP ======================
 st.set_page_config(page_title="PPT Voice Over Studio", layout="wide")
 st.title("🎤 PPT Voice Over Studio")
-st.caption("Title-based narration • Corruption-safe • Cloud-safe")
+st.caption("Title + Content based narration • Safe • Cloud-ready")
 
 st.divider()
 
@@ -55,8 +55,14 @@ def get_slide_title(slide) -> str:
         pass
     return "the topic"
 
-def generate_narration(slide_text: str, slide_index: int, slide_title: str = "") -> str:
-    base_prompt = f"""
+
+def generate_narration(slide_text: str, slide_index: int, slide_title: str) -> str:
+    if slide_index == 0:
+        start_line = f"Today we are going to explore {slide_title}. "
+    else:
+        start_line = f"In this slide we are going to explore {slide_title}. "
+
+    prompt = f"""
 Generate narration for self-directed learning.
 
 Tone:
@@ -65,19 +71,10 @@ Tone:
 - No headings
 - No bullet points
 
-Instructions:
+Rules:
 - Always explain the slide title first
-- If slide content is meaningful, explain the content using simple real-life examples
+- If slide content is meaningful, explain it with simple real-life examples
 - If slide content is missing or unclear, explain only the title and its importance
-"""
-
-    if slide_index == 0:
-        start_line = f"Today we are going to explore {slide_title}. "
-    else:
-        start_line = f"In this slide we are going to explore {slide_title}. "
-
-    prompt = f"""
-{base_prompt}
 
 Start exactly with:
 "{start_line}"
@@ -95,40 +92,6 @@ Slide Content:
     )
     return response.choices[0].message.content.strip()
 
-
-
-
-'''def generate_narration(slide_text: str, slide_index: int, slide_title: str = "") -> str:
-    if slide_index == 0:
-        prompt = f"""
-Generate narration for self-directed learning.
-
-Rules:
-- Start exactly with: "Today we are going to explore on {slide_title}. Explain {slide_title} and its use cases in real life."
-- Simple Indian teaching tone
-- No headings
-- No bullet points
-"""
-    else:
-        prompt = f"""
-Generate narration for self-directed learning.
-
-Rules:
-- Start exactly with: "In this slide we are going to look into "
-- Simple Indian teaching tone
-- No headings
-- No bullet points
-
-Slide content:
-{slide_text}
-"""
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response.choices[0].message.content.strip()
-
-'''
 # ================= SAFE TTS ======================
 def chunk_text(text, max_chars=900):
     chunks, current = [], ""
@@ -188,24 +151,26 @@ if ppt_file and not st.session_state.ppt_loaded:
     st.session_state.slides.clear()
 
     for idx, slide in enumerate(prs.slides):
+
+        # Exclude title from content text
         slide_text = " ".join(
-            shape.text for shape in slide.shapes if hasattr(shape, "text")
+            shape.text for shape in slide.shapes
+            if hasattr(shape, "text") and shape != slide.shapes.title
         ).strip()
 
         slide_title = get_slide_title(slide)
 
-        # ✅ FIX: Slide 1 ALWAYS uses title-based narration
-        if idx == 0:
-            notes = generate_narration("", idx, slide_title)
-
-        elif not is_text_clear(slide_text):
+        # Skip only if content unclear AND title exists
+        if not is_text_clear(slide_text) and not slide_title:
             st.session_state.slides.append({
-                "index": idx, "text": slide_text, "notes": "", "skip": True
+                "index": idx,
+                "text": slide_text,
+                "notes": "",
+                "skip": True
             })
             continue
 
-        else:
-            notes = generate_narration(slide_text, idx)
+        notes = generate_narration(slide_text, idx, slide_title)
 
         st.session_state.slides.append({
             "index": idx,
@@ -232,7 +197,7 @@ if st.session_state.ppt_loaded:
                 "Narration Text",
                 slide["notes"],
                 key=f"notes_{slide['index']}",
-                height=120,
+                height=130,
             )
 
             if st.button("▶ Preview Voice", key=f"preview_{slide['index']}"):
@@ -273,16 +238,7 @@ if st.session_state.ppt_loaded:
                 notes_slide = slide.notes_slide
                 notes_slide.placeholders[1].text = slide_data["notes"]
             except Exception:
-                try:
-                    regenerated = generate_narration(
-                        slide_data["text"],
-                        slide_data["index"],
-                        get_slide_title(slide)
-                    )
-                    slide_data["notes"] = regenerated
-                    slide.notes_slide.placeholders[1].text = regenerated
-                except Exception:
-                    pass
+                pass
 
         final_ppt = outdir / st.session_state.ppt_name
         prs.save(final_ppt)
