@@ -14,7 +14,6 @@ from pptx.util import Inches
 
 from dotenv import load_dotenv
 from openai import OpenAI
-
 from pydub import AudioSegment
 
 # ===================== ENV ========================
@@ -63,39 +62,40 @@ VOICE_MAP = {
 }
 
 # ================= HELPERS =======================
-def is_text_clear(text: str) -> bool:
-    return bool(text and len(text.strip()) >= 20)
-
-
 def get_slide_title(slide) -> str:
-    """
-    Always return a meaningful title.
-    NEVER return 'the topic'
-    """
     try:
         if slide.shapes.title and slide.shapes.title.text.strip():
             return slide.shapes.title.text.strip()
     except Exception:
         pass
-    return "this slide"
+    return "this concept"
+
+
+# 🔑 ONLY CHANGE IS HERE (dynamic openings)
+OPENING_TEMPLATES = [
+    "Today we are going to explore {title}. ",
+    "Let us now understand {title}. ",
+    "In this section, we will focus on {title}. ",
+    "Next, we are going to look at {title}. ",
+    "Here, we will discuss {title}. ",
+]
 
 
 def generate_narration(slide_text: str, slide_index: int, slide_title: str) -> str:
     title = slide_title.strip()
 
-    opening = (
-        f"Today we are going to explore {title}. "
-        if slide_index == 0
-        else f"In this slide we are going to explore {title}. "
-    )
+    if slide_index == 0:
+        opening = f"Today we are going to explore {title}. "
+    else:
+        template = OPENING_TEMPLATES[slide_index % len(OPENING_TEMPLATES)]
+        opening = template.format(title=title)
 
     prompt = f"""
 You are narrating a PowerPoint slide.
 
-STRICT RULES (must follow):
-- Use the slide title EXACTLY as provided
-- NEVER say 'the topic', 'this topic', or 'the concept'
-- Do NOT give generic explanations
+STRICT RULES:
+- Use the slide title EXACTLY as given
+- NEVER say "this slide", "the topic", or generic phrases
 - Speak ONLY about the slide title and slide content
 - Simple Indian teaching tone
 - No headings
@@ -104,7 +104,7 @@ STRICT RULES (must follow):
 Start exactly with:
 "{opening}"
 
-Slide Title (use this exact wording):
+Slide Title:
 {title}
 
 Slide Content:
@@ -148,8 +148,7 @@ def openai_tts(text: str, out_mp3: Path, voice: str, pitch_change: int, retries=
 
     with open(out_mp3, "wb") as f:
         for chunk in chunks:
-            attempt = 0
-            while attempt < retries:
+            for _ in range(retries):
                 try:
                     with client.audio.speech.with_streaming_response.create(
                         model="gpt-4o-mini-tts",
@@ -160,10 +159,7 @@ def openai_tts(text: str, out_mp3: Path, voice: str, pitch_change: int, retries=
                             f.write(audio_bytes)
                     break
                 except Exception:
-                    attempt += 1
-                    time.sleep(2 * attempt)
-                    if attempt == retries:
-                        raise
+                    time.sleep(1)
 
     apply_pitch(out_mp3, pitch_change)
 
