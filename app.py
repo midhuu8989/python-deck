@@ -55,8 +55,49 @@ def get_slide_title(slide) -> str:
         pass
     return "the topic"
 
-
 def generate_narration(slide_text: str, slide_index: int, slide_title: str = "") -> str:
+    base_prompt = f"""
+Generate narration for self-directed learning.
+
+Tone:
+- Simple Indian teaching style
+- Conversational
+- No headings
+- No bullet points
+
+Instructions:
+- Always explain the slide title first
+- If slide content is meaningful, explain the content using simple real-life examples
+- If slide content is missing or unclear, explain only the title and its importance
+"""
+
+    if slide_index == 0:
+        start_line = f"Today we are going to explore {slide_title}. "
+    else:
+        start_line = f"In this slide we are going to explore {slide_title}. "
+
+    prompt = f"""
+{base_prompt}
+
+Start exactly with:
+"{start_line}"
+
+Slide Title:
+{slide_title}
+
+Slide Content:
+{slide_text}
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.choices[0].message.content.strip()
+
+
+
+'''def generate_narration(slide_text: str, slide_index: int, slide_title: str = "") -> str:
     if slide_index == 0:
         prompt = f"""
 Generate narration for self-directed learning.
@@ -86,7 +127,7 @@ Slide content:
     )
     return response.choices[0].message.content.strip()
 
-
+'''
 # ================= SAFE TTS ======================
 def chunk_text(text, max_chars=900):
     chunks, current = [], ""
