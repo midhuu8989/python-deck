@@ -158,11 +158,20 @@ def _generate_narration_claude(prompt: str) -> str:
             "the Claude fallback."
         )
     st.warning("⚠️ OpenAI limit reached — using Claude to write this narration.")
-    message = anthropic_client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=600,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    try:
+        message = anthropic_client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except anthropic.APIStatusError as exc:
+        raise RuntimeError(
+            f"Claude fallback failed — Anthropic API error {exc.status_code}: "
+            f"{exc.message}"
+        ) from exc
+    except anthropic.APIConnectionError as exc:
+        raise RuntimeError(f"Claude fallback failed — could not reach the "
+                           f"Anthropic API: {exc}") from exc
     return "".join(
         block.text for block in message.content if block.type == "text"
     ).strip()
@@ -281,7 +290,11 @@ if ppt_file and not st.session_state.ppt_loaded:
 
         slide_title = get_slide_title(slide)
 
-        notes = generate_narration(slide_text, idx, slide_title)
+        try:
+            notes = generate_narration(slide_text, idx, slide_title)
+        except Exception as exc:
+            st.error(f"❌ Narration failed on slide {idx + 1}: {exc}")
+            st.stop()
 
         st.session_state.slides.append({
             "index": idx,
